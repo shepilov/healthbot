@@ -466,7 +466,12 @@ function parseLabPanelValues(
   }
 
   const fieldIds = new Map(
-    question.fields.map((field) => [normalizeLabField(field.id), field.id]),
+    question.fields.flatMap((field) =>
+      [field.id, field.label, ...(field.aliases ?? [])].map((alias) => [
+        normalizeLabField(alias),
+        field.id,
+      ]),
+    ),
   );
   const values: Record<string, string | null> = {};
 
@@ -484,10 +489,15 @@ function parseLabPanelValues(
     }
 
     const rawValue = rawValueParts.join("=").trim();
-    values[fieldId] = rawValue.length === 0 ? null : rawValue;
+    values[fieldId] =
+      rawValue.length === 0 || isSkippedLabValue(rawValue) ? null : rawValue;
   }
 
   return values;
+}
+
+function isSkippedLabValue(value: string): boolean {
+  return /^(нет|skip|пропустить)$/iu.test(value.trim());
 }
 
 function normalizeLabField(value: string): string {
@@ -653,8 +663,11 @@ function renderQuestion(
           question.text,
           "",
           "Введите значения в формате:",
-          question.fields.map((field) => `${field.id}=...`).join("\n"),
+          question.fields
+            .map((field) => `${field.id}=... (${field.label})`)
+            .join("\n"),
           "",
+          "Чтобы пропустить отдельное значение, оставьте его пустым или напишите: пропустить",
           "Если анализов нет, отправьте: пропустить",
         ].join("\n"),
       };

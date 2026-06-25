@@ -342,6 +342,7 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
   },
   {
     id: MONTHLY_QUESTIONNAIRE_ID,
+    period: "monthly",
     title: "Ежемесячный чек-ин",
     questions: [
       {
@@ -355,8 +356,57 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
             min: 0,
           },
           {
+            aliases: ["vitamin d"],
             id: "vitamin_d",
             label: "Витамин D",
+            min: 0,
+          },
+          {
+            aliases: ["ТТГ", "thyroid_stimulating_hormone"],
+            id: "tsh",
+            label: "TSH",
+            min: 0,
+          },
+          {
+            aliases: ["Т4"],
+            id: "t4",
+            label: "T4",
+            min: 0,
+          },
+          {
+            aliases: ["Глюкоза"],
+            id: "glucose",
+            label: "Glucose",
+            min: 0,
+          },
+          {
+            aliases: ["Инсулин"],
+            id: "insulin",
+            label: "Insulin",
+            min: 0,
+          },
+          {
+            aliases: ["HbA1c"],
+            id: "hba1c",
+            label: "HbA1c",
+            min: 0,
+          },
+          {
+            aliases: ["ЛПНП"],
+            id: "ldl",
+            label: "LDL",
+            min: 0,
+          },
+          {
+            aliases: ["ЛПВП"],
+            id: "hdl",
+            label: "HDL",
+            min: 0,
+          },
+          {
+            aliases: ["Триглицериды"],
+            id: "triglycerides",
+            label: "Triglycerides",
             min: 0,
           },
         ],

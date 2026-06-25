@@ -59,6 +59,7 @@ export interface MultiQuestion extends BaseQuestion<"multi"> {
 export type PhotoQuestion = BaseQuestion<"photo">;
 
 export interface LabPanelField {
+  readonly aliases?: readonly string[];
   readonly id: string;
   readonly label: string;
   readonly max?: number;

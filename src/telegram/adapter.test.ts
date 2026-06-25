@@ -415,6 +415,72 @@ describe("Telegram adapter", () => {
       currentQuestionId: "face_photo",
     });
   });
+
+  it("parses monthly lab text with aliases and skipped values", async () => {
+    const app = createInMemoryHealthBotApp();
+    const bot = createHealthBot({
+      app,
+      botInfo: testBotInfo,
+      logger: pino({ enabled: false }),
+      token: "123456:test-token",
+    });
+    installTelegramApiMock(bot);
+
+    await bot.handleUpdate(messageUpdate(1, "/monthly"));
+    await bot.handleUpdate(
+      messageUpdate(2, "Ферритин=42, ТТГ=2.1, vitamin_d=пропустить"),
+    );
+
+    const events = await app.eventStore.loadByUser("200");
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            answer: expect.objectContaining({
+              ferritin: 42,
+              glucose: null,
+              tsh: 2.1,
+              vitamin_d: null,
+            }),
+            questionId: "monthly_labs",
+          }),
+          type: "AnswerRecorded",
+        }),
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            period: "monthly",
+            questionnaireId: "monthly",
+          }),
+          type: "PeriodCheckInCompleted",
+        }),
+      ]),
+    );
+  });
+
+  it("shows a retry prompt for invalid monthly lab values", async () => {
+    const app = createInMemoryHealthBotApp();
+    const bot = createHealthBot({
+      app,
+      botInfo: testBotInfo,
+      logger: pino({ enabled: false }),
+      token: "123456:test-token",
+    });
+    const calls = installTelegramApiMock(bot);
+
+    await bot.handleUpdate(messageUpdate(1, "/monthly"));
+    calls.length = 0;
+    await bot.handleUpdate(messageUpdate(2, "Ферритин=abc"));
+
+    expect(
+      findMessageContaining(calls, "Не получилось записать ответ")?.payload,
+    ).toMatchObject({
+      text: expect.stringContaining("Ферритин: Expected a number"),
+    });
+    await expect(app.activeFlowStore.get("200")).resolves.toMatchObject({
+      currentQuestionId: "monthly_labs",
+    });
+  });
 });
 
 function messageUpdate(updateId: number, text: string): Update {

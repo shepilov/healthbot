@@ -5,6 +5,7 @@ import { InMemoryActiveFlowStore, QuestionnaireEngine } from "./index.js";
 import {
   DAILY_QUESTIONNAIRE_ID,
   defaultQuestionnaires,
+  MONTHLY_QUESTIONNAIRE_ID,
   PROFILE_QUESTIONNAIRE_ID,
   WEEKLY_QUESTIONNAIRE_ID,
 } from "./default-questionnaires.js";
@@ -374,6 +375,186 @@ describe("default weekly questionnaire", () => {
   });
 });
 
+describe("default monthly questionnaire", () => {
+  it("contains the full monthly lab panel", () => {
+    const monthly = getMonthlyQuestionnaire();
+    const [question] = monthly.questions;
+
+    if (question?.type !== "lab_panel") {
+      throw new Error("Monthly questionnaire must contain a lab panel");
+    }
+
+    expect(monthly.period).toBe("monthly");
+    expect(question.id).toBe("monthly_labs");
+    expect(question.fields.map((field) => field.id)).toEqual([
+      "ferritin",
+      "vitamin_d",
+      "tsh",
+      "t4",
+      "glucose",
+      "insulin",
+      "hba1c",
+      "ldl",
+      "hdl",
+      "triglycerides",
+    ]);
+  });
+
+  it("completes the monthly flow with all lab values and emits a monthly period event", async () => {
+    const { engine } = createDefaultQuestionnaireEngine({
+      clock: () => new Date(2026, 5, 25, 12, 0, 0),
+    });
+
+    await engine.start({
+      questionnaireId: MONTHLY_QUESTIONNAIRE_ID,
+      userId: "user-1",
+    });
+    const result = await answerLabPanel(engine, {
+      ferritin: "42.5",
+      glucose: "5.1",
+      hba1c: "5.4",
+      hdl: "1.6",
+      insulin: "8",
+      ldl: "2.8",
+      t4: "14",
+      triglycerides: "0.9",
+      tsh: "2.1",
+      vitamin_d: "35",
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      events: [
+        {
+          payload: {
+            answer: {
+              ferritin: 42.5,
+              glucose: 5.1,
+              hba1c: 5.4,
+              hdl: 1.6,
+              insulin: 8,
+              ldl: 2.8,
+              t4: 14,
+              triglycerides: 0.9,
+              tsh: 2.1,
+              vitamin_d: 35,
+            },
+            questionId: "monthly_labs",
+            questionnaireId: MONTHLY_QUESTIONNAIRE_ID,
+          },
+          type: "AnswerRecorded",
+        },
+        {
+          payload: {
+            questionnaireId: MONTHLY_QUESTIONNAIRE_ID,
+          },
+          type: "QuestionnaireCompleted",
+        },
+        {
+          payload: {
+            period: "monthly",
+            periodKey: "2026-06",
+            questionnaireId: MONTHLY_QUESTIONNAIRE_ID,
+          },
+          type: "PeriodCheckInCompleted",
+        },
+      ],
+    });
+  });
+
+  it("records skipped monthly lab values explicitly", async () => {
+    const { engine } = createDefaultQuestionnaireEngine();
+
+    await engine.start({
+      questionnaireId: MONTHLY_QUESTIONNAIRE_ID,
+      userId: "user-1",
+    });
+    const result = await answerLabPanel(engine, {
+      ferritin: "42.5",
+      vitamin_d: null,
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      events: [
+        {
+          payload: {
+            answer: {
+              ferritin: 42.5,
+              glucose: null,
+              hba1c: null,
+              hdl: null,
+              insulin: null,
+              ldl: null,
+              t4: null,
+              triglycerides: null,
+              tsh: null,
+              vitamin_d: null,
+            },
+          },
+          type: "AnswerRecorded",
+        },
+        { type: "QuestionnaireCompleted" },
+        { type: "PeriodCheckInCompleted" },
+      ],
+    });
+  });
+
+  it("can complete the monthly flow with no lab values", async () => {
+    const { engine } = createDefaultQuestionnaireEngine();
+
+    await engine.start({
+      questionnaireId: MONTHLY_QUESTIONNAIRE_ID,
+      userId: "user-1",
+    });
+    const result = await answerLabPanel(engine, {});
+
+    expect(result).toMatchObject({
+      status: "completed",
+      events: [
+        {
+          payload: {
+            answer: {
+              ferritin: null,
+              glucose: null,
+              hba1c: null,
+              hdl: null,
+              insulin: null,
+              ldl: null,
+              t4: null,
+              triglycerides: null,
+              tsh: null,
+              vitamin_d: null,
+            },
+          },
+          type: "AnswerRecorded",
+        },
+        { type: "QuestionnaireCompleted" },
+        { type: "PeriodCheckInCompleted" },
+      ],
+    });
+  });
+
+  it("rejects invalid monthly lab values and keeps the lab panel active", async () => {
+    const { engine } = createDefaultQuestionnaireEngine();
+
+    await engine.start({
+      questionnaireId: MONTHLY_QUESTIONNAIRE_ID,
+      userId: "user-1",
+    });
+
+    await expect(
+      answerLabPanel(engine, {
+        ferritin: "abc",
+      }),
+    ).resolves.toMatchObject({
+      question: { id: "monthly_labs" },
+      status: "rejected",
+      validationError: "Ферритин: Expected a number",
+    });
+  });
+});
+
 function createProfileEngine() {
   return createDefaultQuestionnaireEngine();
 }
@@ -456,6 +637,19 @@ async function answerPhoto(engine: QuestionnaireEngine, fileId: string) {
   });
 }
 
+async function answerLabPanel(
+  engine: QuestionnaireEngine,
+  values: Record<string, number | string | null | undefined>,
+) {
+  return engine.answer({
+    userId: "user-1",
+    input: {
+      type: "lab_panel",
+      values,
+    },
+  });
+}
+
 async function answerMulti(engine: QuestionnaireEngine, optionId: string) {
   await engine.answer({
     userId: "user-1",
@@ -507,4 +701,16 @@ function getWeeklyQuestionnaire() {
   }
 
   return weekly;
+}
+
+function getMonthlyQuestionnaire() {
+  const monthly = defaultQuestionnaires.find(
+    (questionnaire) => questionnaire.id === MONTHLY_QUESTIONNAIRE_ID,
+  );
+
+  if (monthly === undefined) {
+    throw new Error("Monthly questionnaire is missing");
+  }
+
+  return monthly;
 }
