@@ -1,0 +1,236 @@
+import pino from "pino";
+import type { Update, UserFromGetMe } from "grammy/types";
+import { describe, expect, it } from "vitest";
+
+import { createInMemoryHealthBotApp } from "../app.js";
+import { createHealthBot } from "../bot.js";
+import type { QuestionnaireDefinition } from "../questionnaire/index.js";
+import type { TelegramApiCall } from "./test-helpers.js";
+import { installTelegramApiMock } from "./test-helpers.js";
+
+const testBotInfo: UserFromGetMe = {
+  id: 999,
+  is_bot: true,
+  first_name: "Healthbot",
+  username: "healthbot",
+  can_join_groups: true,
+  can_read_all_group_messages: false,
+  supports_inline_queries: false,
+  can_connect_to_business: false,
+  has_main_web_app: false,
+  has_topics_enabled: false,
+  allows_users_to_create_topics: false,
+  can_manage_bots: false,
+  supports_join_request_queries: false,
+};
+
+describe("Telegram adapter", () => {
+  it("starts profile intake from /start when profile is missing", async () => {
+    const app = createInMemoryHealthBotApp();
+    const bot = createHealthBot({
+      app,
+      botInfo: testBotInfo,
+      logger: pino({ enabled: false }),
+      token: "123456:test-token",
+    });
+    const calls = installTelegramApiMock(bot);
+
+    await bot.handleUpdate({
+      update_id: 1,
+      message: {
+        message_id: 1,
+        date: 1,
+        chat: { id: 100, type: "private", first_name: "User" },
+        from: { id: 200, is_bot: false, first_name: "User" },
+        text: "/start",
+        entities: [{ offset: 0, length: 6, type: "bot_command" }],
+      },
+    } satisfies Update);
+
+    await expect(app.eventStore.loadByUser("200")).resolves.toMatchObject([
+      { type: "QuestionnaireStarted" },
+    ]);
+    expect(findMethod(calls, "sendMessage")?.payload).toMatchObject({
+      chat_id: 100,
+      text: expect.stringContaining("Возраст"),
+    });
+  });
+
+  it("shows check-in commands from /start when profile is complete", async () => {
+    const app = createInMemoryHealthBotApp();
+    const bot = createHealthBot({
+      app,
+      botInfo: testBotInfo,
+      logger: pino({ enabled: false }),
+      token: "123456:test-token",
+    });
+    const calls = installTelegramApiMock(bot);
+
+    await bot.handleUpdate(messageUpdate(1, "/start"));
+    await bot.handleUpdate(messageUpdate(2, "35"));
+    calls.length = 0;
+
+    await bot.handleUpdate(messageUpdate(3, "/start"));
+
+    expect(findMethod(calls, "sendMessage")?.payload).toMatchObject({
+      text: expect.stringContaining("/daily"),
+    });
+  });
+
+  it("answers callback queries and records scale answers", async () => {
+    const app = createInMemoryHealthBotApp();
+    const bot = createHealthBot({
+      app,
+      botInfo: testBotInfo,
+      logger: pino({ enabled: false }),
+      token: "123456:test-token",
+    });
+    const calls = installTelegramApiMock(bot);
+
+    await bot.handleUpdate(messageUpdate(1, "/daily"));
+    calls.length = 0;
+
+    await bot.handleUpdate({
+      update_id: 2,
+      callback_query: {
+        id: "callback-1",
+        chat_instance: "chat-instance",
+        data: "q:scale:7",
+        from: { id: 200, is_bot: false, first_name: "User" },
+        message: {
+          message_id: 10,
+          date: 1,
+          chat: { id: 100, type: "private", first_name: "User" },
+        },
+      },
+    } satisfies Update);
+
+    expect(calls.map((call) => call.method)).toContain("answerCallbackQuery");
+    await expect(app.eventStore.loadByUser("200")).resolves.toMatchObject([
+      { type: "QuestionnaireStarted" },
+      {
+        type: "AnswerRecorded",
+        payload: {
+          answer: 7,
+        },
+      },
+      { type: "QuestionnaireCompleted" },
+    ]);
+  });
+
+  it("cancels an active questionnaire", async () => {
+    const app = createInMemoryHealthBotApp();
+    const bot = createHealthBot({
+      app,
+      botInfo: testBotInfo,
+      logger: pino({ enabled: false }),
+      token: "123456:test-token",
+    });
+    const calls = installTelegramApiMock(bot);
+
+    await bot.handleUpdate(messageUpdate(1, "/daily"));
+    await bot.handleUpdate(messageUpdate(2, "/cancel"));
+
+    await expect(app.activeFlowStore.get("200")).resolves.toBeUndefined();
+    await expect(app.eventStore.loadByUser("200")).resolves.toMatchObject([
+      { type: "QuestionnaireStarted" },
+      { type: "QuestionnaireCancelled" },
+    ]);
+    expect(calls.at(-1)?.payload).toMatchObject({
+      text: expect.stringContaining("отменена"),
+    });
+  });
+
+  it("records only Telegram photo identifiers for photo answers", async () => {
+    const questionnaires: readonly QuestionnaireDefinition[] = [
+      {
+        id: "profile",
+        questions: [
+          {
+            id: "face_photo",
+            text: "Фото лица",
+            type: "photo",
+          },
+        ],
+      },
+    ];
+    const app = createInMemoryHealthBotApp({ questionnaires });
+    const bot = createHealthBot({
+      app,
+      botInfo: testBotInfo,
+      logger: pino({ enabled: false }),
+      token: "123456:test-token",
+    });
+    installTelegramApiMock(bot);
+
+    await bot.handleUpdate(messageUpdate(1, "/profile"));
+    await bot.handleUpdate({
+      update_id: 2,
+      message: {
+        message_id: 2,
+        date: 1,
+        chat: { id: 100, type: "private", first_name: "User" },
+        from: { id: 200, is_bot: false, first_name: "User" },
+        photo: [
+          {
+            file_id: "small-file",
+            file_unique_id: "small-unique",
+            width: 10,
+            height: 10,
+          },
+          {
+            file_id: "large-file",
+            file_unique_id: "large-unique",
+            width: 100,
+            height: 100,
+          },
+        ],
+      },
+    } satisfies Update);
+
+    await expect(app.eventStore.loadByUser("200")).resolves.toMatchObject([
+      { type: "QuestionnaireStarted" },
+      {
+        type: "PhotoReceived",
+        payload: {
+          fileId: "large-file",
+          fileUniqueId: "large-unique",
+        },
+      },
+      {
+        type: "AnswerRecorded",
+        payload: {
+          answer: {
+            fileId: "large-file",
+            fileUniqueId: "large-unique",
+          },
+        },
+      },
+      { type: "QuestionnaireCompleted" },
+    ]);
+  });
+});
+
+function messageUpdate(updateId: number, text: string): Update {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId,
+      date: 1,
+      chat: { id: 100, type: "private", first_name: "User" },
+      from: { id: 200, is_bot: false, first_name: "User" },
+      text,
+      ...(text.startsWith("/")
+        ? {
+            entities: [
+              { offset: 0, length: text.length, type: "bot_command" as const },
+            ],
+          }
+        : {}),
+    },
+  } satisfies Update;
+}
+
+function findMethod(calls: readonly TelegramApiCall[], method: string) {
+  return calls.find((call) => call.method === method);
+}

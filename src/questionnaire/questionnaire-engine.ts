@@ -44,6 +44,12 @@ export interface QuestionnaireEngineResult {
   readonly validationError?: string;
 }
 
+export interface ActiveQuestionnaireResult {
+  readonly flow: ActiveQuestionnaireFlow;
+  readonly question: QuestionDefinition;
+  readonly questionnaire: QuestionnaireDefinition;
+}
+
 export interface StartQuestionnaireInput {
   readonly chatId?: ChatId;
   readonly questionnaireId: QuestionnaireId;
@@ -252,6 +258,25 @@ export class QuestionnaireEngine {
       flow: nextFlow,
       question: nextQuestion,
       status: "answered",
+    };
+  }
+
+  async getActiveQuestion(
+    userId: UserId,
+  ): Promise<ActiveQuestionnaireResult | undefined> {
+    const flow = await this.activeFlowStore.get(userId);
+
+    if (flow === undefined) {
+      return undefined;
+    }
+
+    const questionnaire = this.getQuestionnaire(flow.questionnaireId);
+    const question = this.getQuestion(questionnaire, flow.currentQuestionId);
+
+    return {
+      flow,
+      question,
+      questionnaire,
     };
   }
 

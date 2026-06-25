@@ -1,31 +1,37 @@
 import { Bot } from "grammy";
+import type { UserFromGetMe } from "grammy/types";
 import type { Logger } from "pino";
 
+import { createInMemoryHealthBotApp, type HealthBotApp } from "./app.js";
+import { registerTelegramHandlers } from "./telegram/adapter.js";
+
 export interface HealthBotDependencies {
+  app?: HealthBotApp;
+  botInfo?: UserFromGetMe;
   logger: Logger;
   token: string;
 }
 
-export function createHealthBot({ logger, token }: HealthBotDependencies): Bot {
-  const bot = new Bot(token);
+export function createHealthBot({
+  app = createInMemoryHealthBotApp(),
+  botInfo,
+  logger,
+  token,
+}: HealthBotDependencies): Bot {
+  const bot = new Bot(
+    token,
+    botInfo === undefined
+      ? undefined
+      : {
+          botInfo,
+        },
+  );
 
-  bot.command("start", async (ctx) => {
-    logger.info({ telegramUserId: ctx.from?.id }, "telegram user started bot");
-
-    await ctx.reply(
-      [
-        "Здравствуйте! Я помогу вести трекинг самочувствия, кожи и привычек.",
-        "",
-        "Профиль и чек-ины будут добавлены в следующих задачах.",
-        "Пока можно проверить запуск командой /status.",
-      ].join("\n"),
-    );
-  });
-
-  bot.command("status", async (ctx) => {
-    await ctx.reply(
-      "Бот запущен. Профиль и чек-ины появятся в следующих этапах MVP.",
-    );
+  registerTelegramHandlers(bot, {
+    activeFlowStore: app.activeFlowStore,
+    eventStore: app.eventStore,
+    logger,
+    questionnaireEngine: app.questionnaireEngine,
   });
 
   bot.catch((error) => {
