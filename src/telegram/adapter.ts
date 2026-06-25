@@ -16,7 +16,11 @@ import type {
   QuestionnaireEngine,
   QuestionnaireEngineResult,
 } from "../questionnaire/index.js";
-import { getQuestionnaireStatus } from "../status/questionnaire-status.js";
+import {
+  projectUserStatus,
+  type PeriodCheckInStatus,
+  type UserStatusReadModel,
+} from "../status/questionnaire-status.js";
 import type { EventStore, QuestionnaireId, UserId } from "../domain/index.js";
 
 const CALLBACK_PREFIX = "q";
@@ -151,20 +155,12 @@ async function handleStatus(
   }
 
   const events = await dependencies.eventStore.loadByUser(identity.userId);
-  const profileStatus = getQuestionnaireStatus(
-    events,
-    PROFILE_QUESTIONNAIRE_ID,
-  );
+  const status = projectUserStatus(events, {
+    profileQuestionnaireId: PROFILE_QUESTIONNAIRE_ID,
+  });
   const activeFlow = await dependencies.activeFlowStore.get(identity.userId);
-  const profileText = profileStatus.completed
-    ? "Профиль: заполнен"
-    : "Профиль: не заполнен";
-  const activeText =
-    activeFlow === undefined
-      ? "Активная анкета: нет"
-      : `Активная анкета: ${activeFlow.questionnaireId}`;
 
-  await ctx.reply([profileText, activeText, "", getMainMenuText()].join("\n"));
+  await ctx.reply(renderStatusMessage(status, activeFlow));
 }
 
 async function handleCancel(
@@ -771,8 +767,72 @@ async function isProfileComplete(
   userId: UserId,
 ): Promise<boolean> {
   const events = await eventStore.loadByUser(userId);
+  const status = projectUserStatus(events, {
+    profileQuestionnaireId: PROFILE_QUESTIONNAIRE_ID,
+  });
 
-  return getQuestionnaireStatus(events, PROFILE_QUESTIONNAIRE_ID).completed;
+  return status.profile.completed;
+}
+
+function renderStatusMessage(
+  status: UserStatusReadModel,
+  activeFlow: ActiveQuestionnaireFlow | undefined,
+): string {
+  return [
+    "Статус",
+    status.profile.completed ? "Профиль: заполнен" : "Профиль: не заполнен",
+    activeFlow === undefined
+      ? "Активная анкета: нет"
+      : `Активная анкета: ${getQuestionnaireLabel(activeFlow.questionnaireId)}`,
+    "",
+    "Последние чек-ины:",
+    renderCheckInStatusLine("Ежедневный", status.checkIns.daily),
+    renderCheckInStatusLine("Еженедельный", status.checkIns.weekly),
+    renderCheckInStatusLine("Ежемесячный", status.checkIns.monthly),
+    "",
+    getMainMenuText(),
+  ].join("\n");
+}
+
+function renderCheckInStatusLine(
+  label: string,
+  checkIn: PeriodCheckInStatus | undefined,
+): string {
+  if (checkIn === undefined) {
+    return `${label}: нет`;
+  }
+
+  return `${label}: ${checkIn.periodKey}, обновлено ${formatStatusDateTime(
+    checkIn.completedAt,
+  )}`;
+}
+
+function formatStatusDateTime(date: Date): string {
+  return [
+    [date.getFullYear(), pad2(date.getMonth() + 1), pad2(date.getDate())].join(
+      "-",
+    ),
+    [pad2(date.getHours()), pad2(date.getMinutes())].join(":"),
+  ].join(" ");
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function getQuestionnaireLabel(questionnaireId: QuestionnaireId): string {
+  switch (questionnaireId) {
+    case DAILY_QUESTIONNAIRE_ID:
+      return "ежедневный чек-ин";
+    case MONTHLY_QUESTIONNAIRE_ID:
+      return "ежемесячный чек-ин";
+    case PROFILE_QUESTIONNAIRE_ID:
+      return "профиль";
+    case WEEKLY_QUESTIONNAIRE_ID:
+      return "еженедельный чек-ин";
+    default:
+      return questionnaireId;
+  }
 }
 
 function getIdentity(ctx: Context): TelegramIdentity | undefined {
@@ -792,7 +852,7 @@ function getIdentity(ctx: Context): TelegramIdentity | undefined {
 
 function getMainMenuText(): string {
   return [
-    "Профиль заполнен. Доступные чек-ины:",
+    "Доступные команды:",
     "/daily — ежедневный чек-ин",
     "/weekly — еженедельный чек-ин",
     "/monthly — ежемесячный чек-ин",

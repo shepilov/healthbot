@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { createInMemoryHealthBotApp } from "../app.js";
 import { createHealthBot } from "../bot.js";
+import { createDomainEvent } from "../domain/index.js";
 import type { QuestionnaireDefinition } from "../questionnaire/index.js";
 import type { TelegramApiCall } from "./test-helpers.js";
 import { installTelegramApiMock } from "./test-helpers.js";
@@ -88,6 +89,83 @@ describe("Telegram adapter", () => {
     expect(findMethod(calls, "sendMessage")?.payload).toMatchObject({
       text: expect.stringContaining("/daily"),
     });
+  });
+
+  it("reports profile and latest check-ins from /status", async () => {
+    const app = createInMemoryHealthBotApp();
+    const bot = createHealthBot({
+      app,
+      botInfo: testBotInfo,
+      logger: pino({ enabled: false }),
+      token: "123456:test-token",
+    });
+    const calls = installTelegramApiMock(bot);
+
+    await app.eventStore.append([
+      createDomainEvent({
+        occurredAt: new Date(2026, 5, 25, 8, 0, 0),
+        type: "QuestionnaireCompleted",
+        userId: "200",
+        payload: {
+          questionnaireId: "profile",
+        },
+      }),
+      createDomainEvent({
+        occurredAt: new Date(2026, 5, 25, 9, 0, 0),
+        type: "PeriodCheckInCompleted",
+        userId: "200",
+        payload: {
+          period: "daily",
+          periodKey: "2026-06-25",
+          questionnaireId: "daily",
+        },
+      }),
+      createDomainEvent({
+        occurredAt: new Date(2026, 5, 25, 18, 0, 0),
+        type: "PeriodCheckInCompleted",
+        userId: "200",
+        payload: {
+          period: "daily",
+          periodKey: "2026-06-25",
+          questionnaireId: "daily",
+        },
+      }),
+      createDomainEvent({
+        occurredAt: new Date(2026, 5, 25, 19, 30, 0),
+        type: "PeriodCheckInCompleted",
+        userId: "200",
+        payload: {
+          period: "weekly",
+          periodKey: "2026-W26",
+          questionnaireId: "weekly",
+        },
+      }),
+    ]);
+
+    await bot.handleUpdate(messageUpdate(1, "/status"));
+
+    const statusMessage = findMessageContaining(calls, "Последние чек-ины");
+
+    expect(statusMessage?.payload).toMatchObject({
+      text: expect.stringContaining("Профиль: заполнен"),
+    });
+    expect(statusMessage?.payload).toMatchObject({
+      text: expect.stringContaining(
+        "Ежедневный: 2026-06-25, обновлено 2026-06-25 18:00",
+      ),
+    });
+    expect(statusMessage?.payload).toMatchObject({
+      text: expect.stringContaining(
+        "Еженедельный: 2026-W26, обновлено 2026-06-25 19:30",
+      ),
+    });
+    expect(statusMessage?.payload).toMatchObject({
+      text: expect.stringContaining("Ежемесячный: нет"),
+    });
+    expect(statusMessage?.payload).not.toMatchObject({
+      text: expect.stringContaining("2026-06-25 09:00"),
+    });
+    await expect(app.eventStore.loadByUser("200")).resolves.toHaveLength(4);
   });
 
   it("answers callback queries and records scale answers", async () => {
