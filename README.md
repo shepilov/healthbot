@@ -36,6 +36,7 @@ Configure `.env`:
 
 ```sh
 BOT_TOKEN=123456:your-real-token
+BOT_MODE=long-polling
 LOG_LEVEL=info
 ```
 
@@ -57,11 +58,60 @@ npm run build
 npm start
 ```
 
+## Webhook Deployment
+
+The bot can run either in long-polling mode or webhook mode.
+
+Use webhook mode when the app is deployed behind a public HTTPS URL:
+
+```sh
+BOT_TOKEN=123456:your-real-token
+BOT_MODE=webhook
+WEBHOOK_URL=https://your-domain.example/telegram/webhook
+WEBHOOK_SECRET=replace-with-random-secret-token
+HOST=0.0.0.0
+PORT=3000
+HEALTHCHECK_PATH=/health
+```
+
+In webhook mode the app:
+
+- starts an HTTP server on `HOST:PORT`;
+- serves `GET /health` for platform health checks;
+- accepts Telegram updates on the path from `WEBHOOK_URL`;
+- configures Telegram with `setWebhook`;
+- validates `X-Telegram-Bot-Api-Secret-Token` when `WEBHOOK_SECRET` is set.
+
+Telegram requires the public webhook URL to use HTTPS. TLS can terminate at the
+hosting provider or reverse proxy; the container itself listens over HTTP.
+
+## Docker
+
+Build the image:
+
+```sh
+docker build -t healthbot .
+```
+
+Run in webhook mode:
+
+```sh
+docker run --rm -p 3000:3000 \
+  -e BOT_TOKEN=123456:your-real-token \
+  -e BOT_MODE=webhook \
+  -e WEBHOOK_URL=https://your-domain.example/telegram/webhook \
+  -e WEBHOOK_SECRET=replace-with-random-secret-token \
+  healthbot
+```
+
+The image runs `node dist/main.js` as the non-root `node` user and includes a
+Docker healthcheck against `HEALTHCHECK_PATH`.
+
 ## Bot Commands
 
 - `/start` starts profile intake if the profile is missing, otherwise shows
   available commands.
-- `/profile` restarts the one-time profile questionnaire.
+- `/profile` edits the profile questionnaire using the latest saved answers.
 - `/daily` starts the daily check-in.
 - `/weekly` starts the weekly check-in with face photo upload.
 - `/monthly` starts the monthly lab values flow.
@@ -127,5 +177,5 @@ and rebuild read models by replaying events through the existing projectors.
 - Face photos are not downloaded or analyzed; only Telegram `file_id` is
   recorded in memory.
 - Lab values are validated as numbers only; there is no medical interpretation.
-- Webhook deployment, reminders, scheduling, authentication beyond Telegram,
-  and external analytics are out of scope for the MVP.
+- Reminders, scheduling, authentication beyond Telegram, and external analytics
+  are out of scope for the MVP.

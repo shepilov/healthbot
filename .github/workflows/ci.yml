@@ -49,5 +49,8 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Build Docker image
+        run: docker build --tag healthbot:ci .
+
       - name: Audit dependencies
         run: npm audit --audit-level=moderate
