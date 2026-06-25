@@ -57,7 +57,20 @@ describe("Telegram adapter", () => {
   });
 
   it("shows check-in commands from /start when profile is complete", async () => {
-    const app = createInMemoryHealthBotApp();
+    const app = createInMemoryHealthBotApp({
+      questionnaires: [
+        {
+          id: "profile",
+          questions: [
+            {
+              id: "age",
+              text: "Возраст",
+              type: "number",
+            },
+          ],
+        },
+      ],
+    });
     const bot = createHealthBot({
       app,
       botInfo: testBotInfo,
