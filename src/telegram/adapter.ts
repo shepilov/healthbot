@@ -11,6 +11,7 @@ import {
 import type {
   ActiveFlowStore,
   ActiveQuestionnaireFlow,
+  AnswerMap,
   LabPanelQuestion,
   QuestionDefinition,
   QuestionnaireAnswerInput,
@@ -29,10 +30,13 @@ import type {
   CheckInPeriod,
   EventStore,
   QuestionnaireId,
+  QuestionId,
+  StoredDomainEvent,
   UserId,
 } from "../domain/index.js";
 
 const CALLBACK_PREFIX = "q";
+const HTML_PARSE_MODE = "HTML";
 
 export interface TelegramAdapterDependencies {
   readonly activeFlowStore: ActiveFlowStore;
@@ -127,7 +131,7 @@ export function registerTelegramHandlers(
 }
 
 async function handleHelp(ctx: Context): Promise<void> {
-  await ctx.reply(getHelpText());
+  await replyHtml(ctx, getHelpText());
 }
 
 async function safelyAnswerCallbackQuery(
@@ -149,7 +153,7 @@ async function handleStart(
   const identity = getIdentity(ctx);
 
   if (identity === undefined) {
-    await ctx.reply("Не удалось определить пользователя Telegram.");
+    await replyHtml(ctx, "⚠️ Не удалось определить пользователя Telegram.");
     return;
   }
 
@@ -168,7 +172,7 @@ async function handleStart(
     return;
   }
 
-  await ctx.reply(getMainMenuText());
+  await replyHtml(ctx, getMainMenuText());
 }
 
 async function startQuestionnaire(
@@ -181,7 +185,7 @@ async function startQuestionnaire(
   const identity = getIdentity(ctx);
 
   if (identity === undefined) {
-    await ctx.reply("Не удалось определить пользователя Telegram.");
+    await replyHtml(ctx, "⚠️ Не удалось определить пользователя Telegram.");
     return;
   }
 
@@ -194,24 +198,32 @@ async function startQuestionnaire(
     ))
   ) {
     state.pendingPeriodStarts.set(identity.userId, questionnaireId);
-    await ctx.reply(
-      "Этот чек-ин уже заполнен за текущий период. Обновить ответы?",
-      {
-        reply_markup: new InlineKeyboard()
-          .text(
-            "Обновить",
-            `${CALLBACK_PREFIX}:start_confirm:${questionnaireId}`,
-          )
-          .text("Отмена", `${CALLBACK_PREFIX}:start_cancel:${questionnaireId}`),
-      },
+    await replyHtml(
+      ctx,
+      [
+        "ℹ️ <b>Этот чек-ин уже заполнен за текущий период.</b>",
+        "Обновить ответы?",
+      ].join("\n"),
+      new InlineKeyboard()
+        .text("Обновить", `${CALLBACK_PREFIX}:start_confirm:${questionnaireId}`)
+        .text("Отмена", `${CALLBACK_PREFIX}:start_cancel:${questionnaireId}`),
     );
     return;
   }
 
   clearAnswerSummaryMessagesForUser(state, identity.userId);
+  const initialAnswers =
+    questionnaireId === PROFILE_QUESTIONNAIRE_ID
+      ? await getLatestQuestionnaireAnswers(
+          dependencies.eventStore,
+          identity.userId,
+          questionnaireId,
+        )
+      : undefined;
 
   const result = await dependencies.questionnaireEngine.start({
     chatId: identity.chatId,
+    ...(initialAnswers === undefined ? {} : { initialAnswers }),
     questionnaireId,
     userId: identity.userId,
   });
@@ -226,7 +238,7 @@ async function handleStatus(
   const identity = getIdentity(ctx);
 
   if (identity === undefined) {
-    await ctx.reply("Не удалось определить пользователя Telegram.");
+    await replyHtml(ctx, "⚠️ Не удалось определить пользователя Telegram.");
     return;
   }
 
@@ -236,7 +248,7 @@ async function handleStatus(
   });
   const activeFlow = await dependencies.activeFlowStore.get(identity.userId);
 
-  await ctx.reply(renderStatusMessage(status, activeFlow));
+  await replyHtml(ctx, renderStatusMessage(status, activeFlow));
 }
 
 async function shouldConfirmPeriodStart(
@@ -276,12 +288,16 @@ async function handleStartConfirmation(
   if (
     state.pendingPeriodStarts.get(identity.userId) !== action.questionnaireId
   ) {
-    await ctx.reply("Подтверждение устарело. Запустите чек-ин заново.");
+    await replyHtml(ctx, "⚠️ Подтверждение устарело. Запустите чек-ин заново.");
     return;
   }
 
   state.pendingPeriodStarts.delete(identity.userId);
-  await editCurrentMessageOrReply(ctx, dependencies.logger, "Обновляю чек-ин.");
+  await editCurrentMessageOrReply(
+    ctx,
+    dependencies.logger,
+    "✅ Обновляю чек-ин.",
+  );
   await startQuestionnaire(ctx, dependencies, state, action.questionnaireId, {
     skipPeriodConfirmation: true,
   });
@@ -293,15 +309,15 @@ async function editCurrentMessageOrReply(
   text: string,
 ): Promise<void> {
   if (ctx.callbackQuery?.message === undefined) {
-    await ctx.reply(text);
+    await replyHtml(ctx, text);
     return;
   }
 
   try {
-    await ctx.editMessageText(text);
+    await ctx.editMessageText(text, toHtmlReplyOptions());
   } catch (error) {
     logger.warn({ err: error }, "failed to edit telegram message");
-    await ctx.reply(text);
+    await replyHtml(ctx, text);
   }
 }
 
@@ -313,7 +329,7 @@ async function handleCancel(
   const identity = getIdentity(ctx);
 
   if (identity === undefined) {
-    await ctx.reply("Не удалось определить пользователя Telegram.");
+    await replyHtml(ctx, "⚠️ Не удалось определить пользователя Telegram.");
     return;
   }
 
@@ -335,14 +351,14 @@ async function handleCallback(
   const data = ctx.callbackQuery?.data;
 
   if (identity === undefined || data === undefined) {
-    await ctx.reply("Не удалось обработать действие.");
+    await replyHtml(ctx, "⚠️ Не удалось обработать действие.");
     return;
   }
 
   const action = parseCallbackData(data);
 
   if (action === undefined) {
-    await ctx.reply("Это действие больше не поддерживается.");
+    await replyHtml(ctx, "⚠️ Это действие больше не поддерживается.");
     return;
   }
 
@@ -356,7 +372,7 @@ async function handleCallback(
     await editCurrentMessageOrReply(
       ctx,
       dependencies.logger,
-      "Ок, не обновляю чек-ин.",
+      "ℹ️ Ок, не обновляю чек-ин.",
     );
     return;
   }
@@ -423,7 +439,7 @@ async function upsertAnswerSummaryMessage(
   text: string,
 ): Promise<void> {
   if (active === undefined) {
-    await ctx.reply(text);
+    await replyHtml(ctx, text);
     return;
   }
 
@@ -436,6 +452,7 @@ async function upsertAnswerSummaryMessage(
         identity.telegramChatId,
         existingMessageId,
         text,
+        toHtmlReplyOptions(),
       );
       return;
     } catch (error) {
@@ -444,7 +461,7 @@ async function upsertAnswerSummaryMessage(
     }
   }
 
-  const message = await ctx.reply(text);
+  const message = await ctx.reply(text, toHtmlReplyOptions());
   state.answerSummaryMessageIds.set(key, message.message_id);
 }
 
@@ -468,6 +485,7 @@ async function removeCurrentQuestionKeyboard(
   try {
     await ctx.editMessageText(
       renderQuestion(active.question, active.flow, active.progress).text,
+      toHtmlReplyOptions(),
     );
   } catch (error) {
     logger.warn({ err: error }, "failed to remove question keyboard");
@@ -502,7 +520,7 @@ async function handlePhotoMessage(
   const photo = ctx.message?.photo?.at(-1);
 
   if (identity === undefined || photo === undefined) {
-    await ctx.reply("Не удалось обработать фото.");
+    await replyHtml(ctx, "⚠️ Не удалось обработать фото.");
     return;
   }
 
@@ -525,7 +543,7 @@ async function handleTextMessage(
   const text = ctx.message?.text;
 
   if (identity === undefined || text === undefined) {
-    await ctx.reply("Не удалось обработать сообщение.");
+    await replyHtml(ctx, "⚠️ Не удалось обработать сообщение.");
     return;
   }
 
@@ -538,8 +556,12 @@ async function handleTextMessage(
   );
 
   if (active === undefined) {
-    await ctx.reply(
-      "Нет активной анкеты. Используйте /profile, /daily, /weekly или /monthly.",
+    await replyHtml(
+      ctx,
+      [
+        "ℹ️ <b>Нет активной анкеты.</b>",
+        `Используйте ${code("/profile")}, ${code("/daily")}, ${code("/weekly")} или ${code("/monthly")}.`,
+      ].join("\n"),
     );
     return;
   }
@@ -775,7 +797,8 @@ function renderResult(
     return {
       ...rendered,
       text: [
-        `Не получилось записать ответ: ${errorText}`,
+        "⚠️ <b>Не получилось записать ответ</b>",
+        escapeHtml(errorText),
         "",
         rendered.text,
       ].join("\n"),
@@ -790,13 +813,13 @@ function renderResult(
 
   if (result.status === "cancelled") {
     return {
-      text: "Анкета отменена.",
+      text: "ℹ️ <b>Анкета отменена.</b>",
     };
   }
 
   if (result.status === "no_active_flow") {
     return {
-      text: "Нет активной анкеты.",
+      text: "ℹ️ <b>Нет активной анкеты.</b>",
     };
   }
 
@@ -807,7 +830,7 @@ function renderCompletionMessage(result: QuestionnaireEngineResult): string {
   const recap = renderCompletionRecap(result.questionnaire, result.answers);
 
   return [
-    "Готово. Ответы сохранены.",
+    "✅ <b>Готово.</b> Ответы сохранены.",
     ...(recap.length === 0 ? [] : ["", ...recap]),
     "",
     getMainMenuText(),
@@ -822,7 +845,9 @@ function renderCompletionRecap(
     return [];
   }
 
-  const lines = [`Итоги: ${questionnaire.title ?? questionnaire.id}`];
+  const lines = [
+    `<b>Итоги: ${escapeHtml(questionnaire.title ?? questionnaire.id)}</b>`,
+  ];
 
   for (const question of questionnaire.questions) {
     if (!Object.hasOwn(answers, question.id)) {
@@ -830,7 +855,9 @@ function renderCompletionRecap(
     }
 
     lines.push(
-      `${question.text}: ${formatAnswer(question, answers[question.id])}`,
+      `• <b>${escapeHtml(question.text)}:</b> ${escapeHtml(
+        formatAnswer(question, answers[question.id]),
+      )}`,
     );
   }
 
@@ -923,11 +950,13 @@ function renderCallbackAnswerConfirmation(
   const question = active.question;
 
   if (input.type === "single" && question.type === "single") {
-    return `Ваш ответ: ${findOptionLabel(question, input.optionId)}`;
+    return `✅ <b>Ваш ответ:</b> ${escapeHtml(
+      findOptionLabel(question, input.optionId),
+    )}`;
   }
 
   if (input.type === "scale_1_10") {
-    return `Ваш ответ: ${input.value}`;
+    return `✅ <b>Ваш ответ:</b> ${escapeHtml(String(input.value))}`;
   }
 
   if (input.type === "multi_toggle" && question.type === "multi") {
@@ -945,7 +974,7 @@ function renderCallbackAnswerConfirmation(
       return undefined;
     }
 
-    return `Ваш ответ: ${labels.join(", ")}`;
+    return `✅ <b>Ваш ответ:</b> ${escapeHtml(labels.join(", "))}`;
   }
 
   return undefined;
@@ -956,14 +985,14 @@ function renderMultiSelectionConfirmation(
   selectedOptionIds: readonly string[],
 ): string {
   if (selectedOptionIds.length === 0) {
-    return "Вы пока ничего не выбрали.";
+    return "ℹ️ Пока ничего не выбрано.";
   }
 
   const labels = selectedOptionIds.map((optionId) =>
     findOptionLabel(question, optionId),
   );
 
-  return `Вы выбрали: ${labels.join(", ")}`;
+  return `✅ <b>Вы выбрали:</b> ${escapeHtml(labels.join(", "))}`;
 }
 
 function findOptionLabel(
@@ -984,25 +1013,36 @@ function renderQuestion(
     [renderQuestionHeader(question, progress), body]
       .filter((part) => part.length > 0)
       .join("\n\n");
+  const body = (details?: string) =>
+    [
+      `<b>${escapeHtml(question.text)}</b>`,
+      renderCurrentAnswer(question, flow),
+      details,
+    ]
+      .filter((part): part is string => part !== undefined && part.length > 0)
+      .join("\n\n");
 
   switch (question.type) {
     case "lab_panel":
       return {
         keyboard: renderNavigationKeyboard(question, progress),
         text: text(
-          [
-            question.text,
-            "",
-            "Введите значения в формате:",
-            question.fields
-              .map((field) => `${field.id}=... (${field.label})`)
-              .join("\n"),
-            "",
-            "Например: ferritin=42, vitamin_d=35",
-            "",
-            "Чтобы пропустить отдельное значение, оставьте его пустым или напишите: пропустить",
-            "Если анализов нет, отправьте: пропустить",
-          ].join("\n"),
+          body(
+            [
+              "Введите значения в формате:",
+              question.fields
+                .map(
+                  (field) =>
+                    `${code(`${field.id}=...`)} (${escapeHtml(field.label)})`,
+                )
+                .join("\n"),
+              "",
+              `Например: ${code("ferritin=42, vitamin_d=35")}`,
+              "",
+              "Чтобы пропустить отдельное значение, оставьте его пустым или напишите: пропустить",
+              `Если анализов нет, отправьте: ${code("пропустить")}`,
+            ].join("\n"),
+          ),
         ),
       };
     case "multi":
@@ -1012,24 +1052,26 @@ function renderQuestion(
           progress,
           renderMultiKeyboard(question, flow),
         ),
-        text: text(question.text),
+        text: text(body()),
       };
     case "number":
       return {
         keyboard: renderNavigationKeyboard(question, progress),
         text: text(
-          `${question.text}\n\n${
+          body(
             question.integer === true
-              ? "Введите целое число, например 35."
-              : "Введите число, например 64.5."
-          }`,
+              ? `Введите целое число, например ${code("35")}.`
+              : `Введите число, например ${code("64.5")}.`,
+          ),
         ),
       };
     case "photo":
       return {
         keyboard: renderNavigationKeyboard(question, progress),
         text: text(
-          `${question.text}\n\nЗагрузите фото или отмените анкету командой /cancel.`,
+          body(
+            `Загрузите фото или отмените анкету командой ${code("/cancel")}.`,
+          ),
         ),
       };
     case "scale_1_10":
@@ -1040,7 +1082,7 @@ function renderQuestion(
           renderScaleKeyboard(),
         ),
         text: text(
-          `${question.text}\n\nВыберите оценку кнопкой или отправьте число от 1 до 10.`,
+          body("Выберите оценку кнопкой или отправьте число от 1 до 10."),
         ),
       };
     case "single":
@@ -1048,16 +1090,29 @@ function renderQuestion(
         keyboard: renderNavigationKeyboard(
           question,
           progress,
-          renderSingleKeyboard(question),
+          renderSingleKeyboard(question, flow),
         ),
-        text: text(question.text),
+        text: text(body()),
       };
     case "text":
       return {
         keyboard: renderNavigationKeyboard(question, progress),
-        text: text(question.text),
+        text: text(body()),
       };
   }
+}
+
+function renderCurrentAnswer(
+  question: QuestionDefinition,
+  flow: ActiveQuestionnaireFlow | undefined,
+): string | undefined {
+  if (flow === undefined || !Object.hasOwn(flow.answers, question.id)) {
+    return undefined;
+  }
+
+  return `↳ <b>Текущий ответ:</b> ${escapeHtml(
+    formatAnswer(question, flow.answers[question.id]),
+  )}`;
 }
 
 function renderNavigationKeyboard(
@@ -1095,25 +1150,47 @@ function renderQuestionHeader(
   const parts = [
     progress === undefined
       ? undefined
-      : `Вопрос ${progress.current} из ${progress.total}`,
-    question.section,
+      : `<b>Вопрос ${progress.current} из ${progress.total}</b>`,
+    question.section === undefined
+      ? undefined
+      : `<i>${escapeHtml(question.section)}</i>`,
   ].filter((part): part is string => part !== undefined && part.length > 0);
 
   return parts.join("\n");
 }
 
-function renderSingleKeyboard(question: QuestionDefinition): InlineKeyboard {
+function renderSingleKeyboard(
+  question: QuestionDefinition,
+  flow: ActiveQuestionnaireFlow | undefined,
+): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
   if (question.type !== "single") {
     return keyboard;
   }
 
+  const currentAnswer = flow?.answers[question.id];
+
   for (const option of question.options) {
-    keyboard.text(option.label, `${CALLBACK_PREFIX}:single:${option.id}`).row();
+    const prefix =
+      currentAnswer !== undefined &&
+      answersEqual(currentAnswer, option.value ?? option.id)
+        ? "✓ "
+        : "";
+
+    keyboard
+      .text(
+        `${prefix}${option.label}`,
+        `${CALLBACK_PREFIX}:single:${option.id}`,
+      )
+      .row();
   }
 
   return keyboard;
+}
+
+function answersEqual(left: AnswerValue, right: AnswerValue): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function renderMultiKeyboard(
@@ -1158,13 +1235,33 @@ function renderScaleKeyboard(): InlineKeyboard {
 }
 
 function toReplyOptions(rendered: RenderedQuestion) {
-  if (rendered.keyboard === undefined) {
-    return undefined;
-  }
+  return toHtmlReplyOptions(rendered.keyboard);
+}
 
+async function replyHtml(
+  ctx: Context,
+  text: string,
+  keyboard?: InlineKeyboard,
+): Promise<void> {
+  await ctx.reply(text, toHtmlReplyOptions(keyboard));
+}
+
+function toHtmlReplyOptions(keyboard?: InlineKeyboard) {
   return {
-    reply_markup: rendered.keyboard,
-  };
+    parse_mode: HTML_PARSE_MODE,
+    ...(keyboard === undefined ? {} : { reply_markup: keyboard }),
+  } as const;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function code(value: string): string {
+  return `<code>${escapeHtml(value)}</code>`;
 }
 
 async function isProfileComplete(
@@ -1179,18 +1276,52 @@ async function isProfileComplete(
   return status.profile.completed;
 }
 
+async function getLatestQuestionnaireAnswers(
+  eventStore: Pick<EventStore, "loadByUser">,
+  userId: UserId,
+  questionnaireId: QuestionnaireId,
+): Promise<AnswerMap> {
+  const events = await eventStore.loadByUser(userId);
+
+  return projectLatestQuestionnaireAnswers(events, questionnaireId);
+}
+
+function projectLatestQuestionnaireAnswers(
+  events: readonly StoredDomainEvent[],
+  questionnaireId: QuestionnaireId,
+): AnswerMap {
+  const answers: Record<QuestionId, AnswerValue> = {};
+
+  for (const event of events) {
+    if (
+      event.type !== "AnswerRecorded" ||
+      event.payload.questionnaireId !== questionnaireId
+    ) {
+      continue;
+    }
+
+    answers[event.payload.questionId] = event.payload.answer;
+  }
+
+  return answers;
+}
+
 function renderStatusMessage(
   status: UserStatusReadModel,
   activeFlow: ActiveQuestionnaireFlow | undefined,
 ): string {
   return [
-    "Статус",
-    status.profile.completed ? "Профиль: заполнен" : "Профиль: не заполнен",
+    "📋 <b>Статус</b>",
+    status.profile.completed
+      ? "<b>Профиль:</b> заполнен"
+      : "<b>Профиль:</b> не заполнен",
     activeFlow === undefined
-      ? "Активная анкета: нет"
-      : `Активная анкета: ${getQuestionnaireLabel(activeFlow.questionnaireId)}`,
+      ? "<b>Активная анкета:</b> нет"
+      : `<b>Активная анкета:</b> ${escapeHtml(
+          getQuestionnaireLabel(activeFlow.questionnaireId),
+        )}`,
     "",
-    "Последние чек-ины:",
+    "<b>Последние чек-ины</b>",
     renderCheckInStatusLine("Ежедневный", status.checkIns.daily),
     renderCheckInStatusLine("Еженедельный", status.checkIns.weekly),
     renderCheckInStatusLine("Ежемесячный", status.checkIns.monthly),
@@ -1204,12 +1335,12 @@ function renderCheckInStatusLine(
   checkIn: PeriodCheckInStatus | undefined,
 ): string {
   if (checkIn === undefined) {
-    return `${label}: нет`;
+    return `• <b>${escapeHtml(label)}:</b> нет`;
   }
 
-  return `${label}: ${checkIn.periodKey}, обновлено ${formatStatusDateTime(
-    checkIn.completedAt,
-  )}`;
+  return `• <b>${escapeHtml(label)}:</b> ${code(
+    checkIn.periodKey,
+  )}, обновлено ${code(formatStatusDateTime(checkIn.completedAt))}`;
 }
 
 function formatStatusDateTime(date: Date): string {
@@ -1272,26 +1403,27 @@ function getIdentity(ctx: Context): TelegramIdentity | undefined {
 
 function getMainMenuText(): string {
   return [
-    "Доступные команды:",
-    "/daily — ежедневный чек-ин",
-    "/weekly — еженедельный чек-ин",
-    "/monthly — ежемесячный чек-ин",
-    "/status — статус профиля и чек-инов",
-    "/help — помощь",
-    "/profile — заполнить профиль заново",
-    "/cancel — отменить активную анкету",
+    "📌 <b>Доступные команды</b>",
+    `${code("/daily")} — ежедневный чек-ин`,
+    `${code("/weekly")} — еженедельный чек-ин`,
+    `${code("/monthly")} — ежемесячные анализы`,
+    `${code("/status")} — статус профиля и чек-инов`,
+    `${code("/help")} — помощь`,
+    `${code("/profile")} — редактировать профиль`,
+    `${code("/cancel")} — отменить активную анкету`,
   ].join("\n");
 }
 
 function getHelpText(): string {
   return [
-    "Помощь",
+    "ℹ️ <b>Помощь</b>",
     "",
     "Бот помогает вести профиль и регулярные чек-ины в Telegram.",
     "",
     getMainMenuText(),
     "",
-    "Важно: это MVP. Данные хранятся только в памяти и исчезают после перезапуска.",
+    "<b>Важно</b>",
+    "Данные пока хранятся только в памяти и исчезают после перезапуска.",
     "Бот не дает медицинских советов, диагнозов, интерпретации анализов или фото.",
   ].join("\n");
 }

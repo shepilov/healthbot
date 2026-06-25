@@ -60,6 +60,7 @@ export interface ActiveQuestionnaireResult {
 
 export interface StartQuestionnaireInput {
   readonly chatId?: ChatId;
+  readonly initialAnswers?: AnswerMap;
   readonly questionnaireId: QuestionnaireId;
   readonly userId: UserId;
 }
@@ -135,6 +136,10 @@ export class QuestionnaireEngine {
     input: StartQuestionnaireInput,
   ): Promise<QuestionnaireEngineResult> {
     const questionnaire = this.getQuestionnaire(input.questionnaireId);
+    const initialAnswers = normalizeQuestionnaireAnswers(
+      questionnaire,
+      input.initialAnswers ?? {},
+    );
     const started = this.createFlowEvent(input, {
       type: "QuestionnaireStarted",
       payload: {
@@ -144,7 +149,7 @@ export class QuestionnaireEngine {
     const firstQuestion = this.findNextVisibleQuestion(
       questionnaire,
       undefined,
-      {},
+      initialAnswers,
     );
 
     if (firstQuestion === undefined) {
@@ -156,21 +161,25 @@ export class QuestionnaireEngine {
       await this.emit(events);
 
       return {
-        answers: {},
+        answers: initialAnswers,
         events,
         questionnaire,
         status: "completed",
       };
     }
 
-    const flow = this.createFlow(input, firstQuestion.id);
+    const flow = this.createFlow(input, questionnaire, firstQuestion.id);
     await this.activeFlowStore.set(flow);
     await this.emit(started);
 
     return {
       events: [started],
       flow,
-      progress: this.getQuestionProgress(questionnaire, firstQuestion.id, {}),
+      progress: this.getQuestionProgress(
+        questionnaire,
+        firstQuestion.id,
+        initialAnswers,
+      ),
       question: firstQuestion,
       status: "started",
     };
@@ -244,10 +253,10 @@ export class QuestionnaireEngine {
       validation.answer,
       input,
     );
-    const answers = {
+    const answers = normalizeQuestionnaireAnswers(questionnaire, {
       ...flow.answers,
       [question.id]: validation.answer,
-    };
+    });
     const nextQuestion = this.findNextVisibleQuestion(
       questionnaire,
       question.id,
@@ -407,12 +416,18 @@ export class QuestionnaireEngine {
 
   private createFlow(
     input: StartQuestionnaireInput,
+    questionnaire: QuestionnaireDefinition,
     currentQuestionId: QuestionId,
   ): ActiveQuestionnaireFlow {
+    const answers = normalizeQuestionnaireAnswers(
+      questionnaire,
+      input.initialAnswers ?? {},
+    );
+
     return {
-      answers: {},
+      answers,
       currentQuestionId,
-      multiSelections: {},
+      multiSelections: getInitialMultiSelections(questionnaire, answers),
       questionnaireId: input.questionnaireId,
       userId: input.userId,
       ...(input.chatId === undefined ? {} : { chatId: input.chatId }),
@@ -687,6 +702,61 @@ function omitAnswer(
   }
 
   return nextAnswers;
+}
+
+function normalizeQuestionnaireAnswers(
+  questionnaire: QuestionnaireDefinition,
+  answers: AnswerMap,
+): AnswerMap {
+  const normalized: Record<QuestionId, AnswerValue> = {};
+
+  for (const question of questionnaire.questions) {
+    if (!Object.hasOwn(answers, question.id)) {
+      continue;
+    }
+
+    const answer = answers[question.id];
+
+    if (answer === undefined) {
+      continue;
+    }
+
+    if (isQuestionVisible(question, normalized)) {
+      normalized[question.id] = answer;
+    }
+  }
+
+  return normalized;
+}
+
+function getInitialMultiSelections(
+  questionnaire: QuestionnaireDefinition,
+  answers: AnswerMap,
+): ActiveQuestionnaireFlow["multiSelections"] {
+  const selections: Record<QuestionId, readonly string[]> = {};
+
+  for (const question of questionnaire.questions) {
+    if (question.type !== "multi") {
+      continue;
+    }
+
+    const answer = answers[question.id];
+
+    if (!Array.isArray(answer)) {
+      continue;
+    }
+
+    const optionIds = new Set(question.options.map((option) => option.id));
+    const selectedOptionIds = answer
+      .map((optionId) => String(optionId))
+      .filter((optionId) => optionIds.has(optionId));
+
+    if (selectedOptionIds.length > 0) {
+      selections[question.id] = selectedOptionIds;
+    }
+  }
+
+  return selections;
 }
 
 function validateTextAnswer(

@@ -56,6 +56,50 @@ describe("getQuestionnaireStatus", () => {
 });
 
 describe("projectUserStatus", () => {
+  it("keeps a completed profile completed while a later edit is cancelled", async () => {
+    const store = new InMemoryEventStore();
+
+    await store.append([
+      createDomainEvent({
+        type: "QuestionnaireStarted",
+        userId: "user-1",
+        payload: {
+          questionnaireId: "profile",
+        },
+      }),
+      createDomainEvent({
+        type: "QuestionnaireCompleted",
+        userId: "user-1",
+        payload: {
+          questionnaireId: "profile",
+        },
+      }),
+      createDomainEvent({
+        type: "QuestionnaireStarted",
+        userId: "user-1",
+        payload: {
+          questionnaireId: "profile",
+        },
+      }),
+      createDomainEvent({
+        type: "QuestionnaireCancelled",
+        userId: "user-1",
+        payload: {
+          questionnaireId: "profile",
+        },
+      }),
+    ]);
+
+    const status = projectUserStatus(await store.loadByUser("user-1"), {
+      profileQuestionnaireId: "profile",
+    });
+
+    expect(status.profile).toEqual({
+      completed: true,
+      started: true,
+    });
+  });
+
   it("projects profile status and latest completed check-ins", async () => {
     const store = new InMemoryEventStore();
 

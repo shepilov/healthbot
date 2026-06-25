@@ -153,6 +153,64 @@ describe("Telegram adapter", () => {
     });
   });
 
+  it("edits profile from latest saved answers and keeps it complete when cancelled", async () => {
+    const app = createInMemoryHealthBotApp({
+      questionnaires: [
+        {
+          id: "profile",
+          questions: [
+            {
+              id: "age",
+              text: "Возраст",
+              type: "number",
+            },
+          ],
+        },
+      ],
+    });
+    const bot = createHealthBot({
+      app,
+      botInfo: testBotInfo,
+      logger: pino({ enabled: false }),
+      token: "123456:test-token",
+    });
+    const calls = installTelegramApiMock(bot);
+
+    await bot.handleUpdate(messageUpdate(1, "/profile"));
+    await bot.handleUpdate(messageUpdate(2, "35"));
+    calls.length = 0;
+
+    await bot.handleUpdate(messageUpdate(3, "/profile"));
+
+    expect(
+      findMessageContaining(calls, "Текущий ответ")?.payload,
+    ).toMatchObject({
+      parse_mode: "HTML",
+      text: expect.stringContaining("↳ <b>Текущий ответ:</b> 35"),
+    });
+    await expect(app.activeFlowStore.get("200")).resolves.toMatchObject({
+      answers: {
+        age: 35,
+      },
+      currentQuestionId: "age",
+    });
+
+    calls.length = 0;
+    await bot.handleUpdate(messageUpdate(4, "/cancel"));
+    await bot.handleUpdate(messageUpdate(5, "/status"));
+
+    expect(
+      findMessageContaining(calls, "<b>Профиль:</b> заполнен")?.payload,
+    ).toBeDefined();
+    await expect(app.eventStore.loadByUser("200")).resolves.toMatchObject([
+      { type: "QuestionnaireStarted" },
+      { type: "AnswerRecorded" },
+      { type: "QuestionnaireCompleted" },
+      { type: "QuestionnaireStarted" },
+      { type: "QuestionnaireCancelled" },
+    ]);
+  });
+
   it("reports profile and latest check-ins from /status", async () => {
     const app = createInMemoryHealthBotApp();
     const bot = createHealthBot({
@@ -209,20 +267,21 @@ describe("Telegram adapter", () => {
     const statusMessage = findMessageContaining(calls, "Последние чек-ины");
 
     expect(statusMessage?.payload).toMatchObject({
-      text: expect.stringContaining("Профиль: заполнен"),
+      parse_mode: "HTML",
+      text: expect.stringContaining("<b>Профиль:</b> заполнен"),
     });
     expect(statusMessage?.payload).toMatchObject({
       text: expect.stringContaining(
-        "Ежедневный: 2026-06-25, обновлено 2026-06-25 18:00",
+        "• <b>Ежедневный:</b> <code>2026-06-25</code>, обновлено <code>2026-06-25 18:00</code>",
       ),
     });
     expect(statusMessage?.payload).toMatchObject({
       text: expect.stringContaining(
-        "Еженедельный: 2026-W26, обновлено 2026-06-25 19:30",
+        "• <b>Еженедельный:</b> <code>2026-W26</code>, обновлено <code>2026-06-25 19:30</code>",
       ),
     });
     expect(statusMessage?.payload).toMatchObject({
-      text: expect.stringContaining("Ежемесячный: нет"),
+      text: expect.stringContaining("• <b>Ежемесячный:</b> нет"),
     });
     expect(statusMessage?.payload).not.toMatchObject({
       text: expect.stringContaining("2026-06-25 09:00"),
@@ -397,11 +456,10 @@ describe("Telegram adapter", () => {
     } satisfies Update);
 
     expect(calls.map((call) => call.method)).toContain("answerCallbackQuery");
-    expect(findMessageContaining(calls, "Ваш ответ: 7")?.payload).toMatchObject(
-      {
-        text: expect.stringContaining("Ваш ответ: 7"),
-      },
-    );
+    expect(findMessageContaining(calls, "Ваш ответ")?.payload).toMatchObject({
+      parse_mode: "HTML",
+      text: expect.stringContaining("✅ <b>Ваш ответ:</b> 7"),
+    });
     await expect(app.eventStore.loadByUser("200")).resolves.toMatchObject([
       { type: "QuestionnaireStarted" },
       {
@@ -445,10 +503,9 @@ describe("Telegram adapter", () => {
     calls.length = 0;
     await bot.handleUpdate(callbackUpdate(2, "q:single:normal"));
 
-    expect(
-      findMessageContaining(calls, "Ваш ответ: Нормальная")?.payload,
-    ).toMatchObject({
-      text: expect.stringContaining("Ваш ответ: Нормальная"),
+    expect(findMessageContaining(calls, "Ваш ответ")?.payload).toMatchObject({
+      parse_mode: "HTML",
+      text: expect.stringContaining("✅ <b>Ваш ответ:</b> Нормальная"),
     });
   });
 
@@ -487,7 +544,8 @@ describe("Telegram adapter", () => {
     expect(
       findMessageContaining(calls, "Итоги: Профиль")?.payload,
     ).toMatchObject({
-      text: expect.stringContaining("Тип кожи: Нормальная"),
+      parse_mode: "HTML",
+      text: expect.stringContaining("• <b>Тип кожи:</b> Нормальная"),
     });
   });
 
@@ -527,9 +585,7 @@ describe("Telegram adapter", () => {
     calls.length = 0;
     await bot.handleUpdate(callbackUpdate(2, "q:single:normal"));
 
-    expect(
-      findMessageContaining(calls, "Ваш ответ: Нормальная")?.payload,
-    ).toBeDefined();
+    expect(findMessageContaining(calls, "Ваш ответ")?.payload).toBeDefined();
     expect(findMessageContaining(calls, "Комментарий")?.payload).toBeDefined();
     expect(findEditContaining(calls, "Комментарий")).toBeUndefined();
   });
@@ -565,23 +621,19 @@ describe("Telegram adapter", () => {
     calls.length = 0;
     await bot.handleUpdate(callbackUpdate(2, "q:multi:skin"));
 
-    expect(
-      findMessageContaining(calls, "Вы выбрали: Кожа")?.payload,
-    ).toMatchObject({
-      text: expect.stringContaining("Вы выбрали: Кожа"),
+    expect(findMessageContaining(calls, "Вы выбрали")?.payload).toMatchObject({
+      parse_mode: "HTML",
+      text: expect.stringContaining("✅ <b>Вы выбрали:</b> Кожа"),
     });
 
     calls.length = 0;
     await bot.handleUpdate(callbackUpdate(3, "q:multi:sleep"));
 
-    expect(
-      findEditContaining(calls, "Вы выбрали: Кожа, Сон")?.payload,
-    ).toMatchObject({
-      text: expect.stringContaining("Вы выбрали: Кожа, Сон"),
+    expect(findEditContaining(calls, "Вы выбрали")?.payload).toMatchObject({
+      parse_mode: "HTML",
+      text: expect.stringContaining("✅ <b>Вы выбрали:</b> Кожа, Сон"),
     });
-    expect(
-      findMessageContaining(calls, "Вы выбрали: Кожа, Сон"),
-    ).toBeUndefined();
+    expect(findMessageContaining(calls, "Кожа, Сон")).toBeUndefined();
   });
 
   it("cancels an active questionnaire", async () => {

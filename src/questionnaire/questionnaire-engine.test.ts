@@ -74,6 +74,75 @@ describe("QuestionnaireEngine", () => {
     });
   });
 
+  it("starts an edit flow from existing answers", async () => {
+    const { activeFlowStore, engine } = createEngine();
+
+    const result = await engine.start({
+      initialAnswers: {
+        cycle_length: 29,
+        cycle_status: "yes",
+        notes: "old note",
+      },
+      questionnaireId: "sample",
+      userId: "user-1",
+    });
+
+    expect(result).toMatchObject({
+      progress: {
+        current: 1,
+        total: 3,
+      },
+      question: { id: "cycle_status" },
+      status: "started",
+    });
+    await expect(activeFlowStore.get("user-1")).resolves.toMatchObject({
+      answers: {
+        cycle_length: 29,
+        cycle_status: "yes",
+        notes: "old note",
+      },
+      currentQuestionId: "cycle_status",
+    });
+  });
+
+  it("drops existing answers that become hidden after an edit", async () => {
+    const { activeFlowStore, engine } = createEngine();
+    await engine.start({
+      initialAnswers: {
+        cycle_length: 29,
+        cycle_status: "yes",
+        notes: "old note",
+      },
+      questionnaireId: "sample",
+      userId: "user-1",
+    });
+
+    const result = await engine.answer({
+      input: {
+        optionId: "no",
+        type: "single",
+      },
+      userId: "user-1",
+    });
+
+    expect(result).toMatchObject({
+      question: { id: "notes" },
+      status: "answered",
+    });
+    await expect(activeFlowStore.get("user-1")).resolves.toMatchObject({
+      answers: {
+        cycle_status: "no",
+        notes: "old note",
+      },
+      currentQuestionId: "notes",
+    });
+    await expect(activeFlowStore.get("user-1")).resolves.not.toMatchObject({
+      answers: {
+        cycle_length: expect.anything(),
+      },
+    });
+  });
+
   it("returns the next visible question after a valid answer", async () => {
     const { engine } = createEngine();
     await engine.start({ questionnaireId: "sample", userId: "user-1" });

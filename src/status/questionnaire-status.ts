@@ -86,7 +86,9 @@ export function createUserStatusProjector({
         return {
           ...state,
           profile: {
-            completed: event.type === "QuestionnaireCompleted",
+            completed:
+              event.type === "QuestionnaireCompleted" ||
+              state.profile.completed,
             started: true,
           },
         };
