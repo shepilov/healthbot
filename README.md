@@ -93,6 +93,13 @@ Build the image:
 docker build -t healthbot .
 ```
 
+Images are published on every push to `master`:
+
+```sh
+docker pull ghcr.io/shepilov/healthbot:latest
+docker pull ghcr.io/shepilov/healthbot:sha-<commit-sha>
+```
+
 Run in webhook mode:
 
 ```sh
@@ -101,7 +108,7 @@ docker run --rm -p 3000:3000 \
   -e BOT_MODE=webhook \
   -e WEBHOOK_URL=https://your-domain.example/telegram/webhook \
   -e WEBHOOK_SECRET=replace-with-random-secret-token \
-  healthbot
+  ghcr.io/shepilov/healthbot:latest
 ```
 
 The image runs `node dist/main.js` as the non-root `node` user and includes a
