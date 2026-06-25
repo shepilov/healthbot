@@ -6,6 +6,7 @@ import { createInMemoryHealthBotApp } from "../app.js";
 import { createHealthBot } from "../bot.js";
 import { createDomainEvent } from "../domain/index.js";
 import type { QuestionnaireDefinition } from "../questionnaire/index.js";
+import { configureTelegramCommands, telegramBotCommands } from "./adapter.js";
 import type { TelegramApiCall } from "./test-helpers.js";
 import { installTelegramApiMock } from "./test-helpers.js";
 
@@ -26,6 +27,59 @@ const testBotInfo: UserFromGetMe = {
 };
 
 describe("Telegram adapter", () => {
+  it("declares the primary Telegram command menu", () => {
+    expect(telegramBotCommands.map((command) => command.command)).toEqual([
+      "start",
+      "help",
+      "profile",
+      "daily",
+      "weekly",
+      "monthly",
+      "status",
+      "cancel",
+    ]);
+  });
+
+  it("registers Telegram commands through the Bot API", async () => {
+    const app = createInMemoryHealthBotApp();
+    const bot = createHealthBot({
+      app,
+      botInfo: testBotInfo,
+      logger: pino({ enabled: false }),
+      token: "123456:test-token",
+    });
+    const calls = installTelegramApiMock(bot);
+
+    await configureTelegramCommands(bot);
+
+    expect(findMethod(calls, "setMyCommands")?.payload).toMatchObject({
+      commands: expect.arrayContaining([
+        expect.objectContaining({ command: "help" }),
+        expect.objectContaining({ command: "status" }),
+      ]),
+    });
+  });
+
+  it("shows help text from /help", async () => {
+    const app = createInMemoryHealthBotApp();
+    const bot = createHealthBot({
+      app,
+      botInfo: testBotInfo,
+      logger: pino({ enabled: false }),
+      token: "123456:test-token",
+    });
+    const calls = installTelegramApiMock(bot);
+
+    await bot.handleUpdate(messageUpdate(1, "/help"));
+
+    expect(findMessageContaining(calls, "Помощь")?.payload).toMatchObject({
+      text: expect.stringContaining("/status"),
+    });
+    expect(findMessageContaining(calls, "Помощь")?.payload).toMatchObject({
+      text: expect.stringContaining("не дает медицинских советов"),
+    });
+  });
+
   it("starts profile intake from /start when profile is missing", async () => {
     const app = createInMemoryHealthBotApp();
     const bot = createHealthBot({
@@ -54,6 +108,9 @@ describe("Telegram adapter", () => {
     expect(findMethod(calls, "sendMessage")?.payload).toMatchObject({
       chat_id: 100,
       text: expect.stringContaining("Возраст"),
+    });
+    expect(findMethod(calls, "sendMessage")?.payload).toMatchObject({
+      text: expect.stringContaining("Вопрос 1 из"),
     });
   });
 
@@ -173,6 +230,131 @@ describe("Telegram adapter", () => {
     await expect(app.eventStore.loadByUser("200")).resolves.toHaveLength(4);
   });
 
+  it("asks for confirmation before updating an already completed daily check-in", async () => {
+    const app = createInMemoryHealthBotApp({
+      questionnaires: [
+        {
+          id: "daily",
+          period: "daily",
+          questions: [
+            {
+              id: "mood",
+              text: "Настроение",
+              type: "scale_1_10",
+            },
+          ],
+        },
+      ],
+    });
+    const bot = createHealthBot({
+      app,
+      botInfo: testBotInfo,
+      clock: () => new Date(2026, 5, 25, 12, 0, 0),
+      logger: pino({ enabled: false }),
+      token: "123456:test-token",
+    });
+    const calls = installTelegramApiMock(bot);
+
+    await app.eventStore.append(
+      createDomainEvent({
+        occurredAt: new Date(2026, 5, 25, 9, 0, 0),
+        type: "PeriodCheckInCompleted",
+        userId: "200",
+        payload: {
+          period: "daily",
+          periodKey: "2026-06-25",
+          questionnaireId: "daily",
+        },
+      }),
+    );
+
+    await bot.handleUpdate(messageUpdate(1, "/daily"));
+
+    expect(findMessageContaining(calls, "уже заполнен")?.payload).toMatchObject(
+      {
+        text: expect.stringContaining("Обновить ответы"),
+      },
+    );
+    await expect(app.activeFlowStore.get("200")).resolves.toBeUndefined();
+
+    calls.length = 0;
+    await bot.handleUpdate(callbackUpdate(2, "q:start_confirm:daily"));
+
+    expect(findMessageContaining(calls, "Настроение")?.payload).toBeDefined();
+    await expect(app.activeFlowStore.get("200")).resolves.toMatchObject({
+      currentQuestionId: "mood",
+    });
+  });
+
+  it("moves back with inline navigation", async () => {
+    const app = createInMemoryHealthBotApp({
+      questionnaires: [
+        {
+          id: "daily",
+          questions: [
+            {
+              id: "mood",
+              text: "Настроение",
+              type: "scale_1_10",
+            },
+            {
+              id: "energy",
+              text: "Энергия",
+              type: "scale_1_10",
+            },
+          ],
+        },
+      ],
+    });
+    const bot = createHealthBot({
+      app,
+      botInfo: testBotInfo,
+      logger: pino({ enabled: false }),
+      token: "123456:test-token",
+    });
+    const calls = installTelegramApiMock(bot);
+
+    await bot.handleUpdate(messageUpdate(1, "/daily"));
+    await bot.handleUpdate(callbackUpdate(2, "q:scale:7"));
+    calls.length = 0;
+    await bot.handleUpdate(callbackUpdate(3, "q:back"));
+
+    expect(findEditContaining(calls, "Настроение")?.payload).toBeDefined();
+    await expect(app.activeFlowStore.get("200")).resolves.toMatchObject({
+      answers: {},
+      currentQuestionId: "mood",
+    });
+  });
+
+  it("skips optional lab panels with inline navigation", async () => {
+    const app = createInMemoryHealthBotApp();
+    const bot = createHealthBot({
+      app,
+      botInfo: testBotInfo,
+      logger: pino({ enabled: false }),
+      token: "123456:test-token",
+    });
+    installTelegramApiMock(bot);
+
+    await bot.handleUpdate(messageUpdate(1, "/monthly"));
+    await bot.handleUpdate(callbackUpdate(2, "q:skip"));
+
+    await expect(app.eventStore.loadByUser("200")).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            answer: expect.objectContaining({
+              ferritin: null,
+              vitamin_d: null,
+            }),
+            questionId: "monthly_labs",
+          }),
+          type: "AnswerRecorded",
+        }),
+      ]),
+    );
+  });
+
   it("answers callback queries and records scale answers", async () => {
     const app = createInMemoryHealthBotApp({
       questionnaires: [
@@ -267,6 +449,45 @@ describe("Telegram adapter", () => {
       findMessageContaining(calls, "Ваш ответ: Нормальная")?.payload,
     ).toMatchObject({
       text: expect.stringContaining("Ваш ответ: Нормальная"),
+    });
+  });
+
+  it("shows a completion recap with option labels", async () => {
+    const app = createInMemoryHealthBotApp({
+      questionnaires: [
+        {
+          id: "profile",
+          title: "Профиль",
+          questions: [
+            {
+              id: "skin_type",
+              text: "Тип кожи",
+              type: "single",
+              options: [
+                { id: "dry", label: "Сухая" },
+                { id: "normal", label: "Нормальная" },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const bot = createHealthBot({
+      app,
+      botInfo: testBotInfo,
+      logger: pino({ enabled: false }),
+      token: "123456:test-token",
+    });
+    const calls = installTelegramApiMock(bot);
+
+    await bot.handleUpdate(messageUpdate(1, "/profile"));
+    calls.length = 0;
+    await bot.handleUpdate(callbackUpdate(2, "q:single:normal"));
+
+    expect(
+      findMessageContaining(calls, "Итоги: Профиль")?.payload,
+    ).toMatchObject({
+      text: expect.stringContaining("Тип кожи: Нормальная"),
     });
   });
 
@@ -558,7 +779,7 @@ describe("Telegram adapter", () => {
     expect(
       findMessageContaining(calls, "Не получилось записать ответ")?.payload,
     ).toMatchObject({
-      text: expect.stringContaining("Ферритин: Expected a number"),
+      text: expect.stringContaining("Ферритин: Введите число"),
     });
     await expect(app.activeFlowStore.get("200")).resolves.toMatchObject({
       currentQuestionId: "monthly_labs",

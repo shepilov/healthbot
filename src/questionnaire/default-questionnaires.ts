@@ -12,6 +12,7 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
     questions: [
       {
         id: "age",
+        section: "Основная информация",
         type: "number",
         text: "Возраст",
         integer: true,
@@ -20,6 +21,7 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
       },
       {
         id: "height",
+        section: "Основная информация",
         type: "number",
         text: "Рост, см",
         integer: true,
@@ -28,6 +30,7 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
       },
       {
         id: "weight",
+        section: "Основная информация",
         type: "number",
         text: "Вес, кг",
         min: 20,
@@ -35,6 +38,7 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
       },
       {
         id: "main_goal",
+        section: "Главная цель",
         type: "multi",
         text: "Что вас беспокоит больше всего?",
         minSelected: 1,
@@ -56,6 +60,7 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
       },
       {
         id: "menstrual_status",
+        section: "Женское здоровье",
         type: "single",
         text: "Менструальный статус",
         options: [
@@ -70,6 +75,7 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
       },
       {
         id: "cycle_length",
+        section: "Женское здоровье",
         type: "single",
         text: "Средняя длина цикла",
         when: ({ getAnswer }) =>
@@ -84,6 +90,7 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
       },
       {
         id: "pms_symptoms",
+        section: "Женское здоровье",
         type: "multi",
         text: "Симптомы ПМС",
         minSelected: 1,
@@ -102,6 +109,7 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
       },
       {
         id: "skin_type",
+        section: "Состояние кожи",
         type: "single",
         text: "Тип кожи",
         options: [
@@ -114,6 +122,7 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
       },
       {
         id: "skin_concerns",
+        section: "Состояние кожи",
         type: "multi",
         text: "Что беспокоит больше всего в состоянии кожи?",
         minSelected: 1,
@@ -131,6 +140,7 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
       },
       {
         id: "regular_skincare",
+        section: "Уход",
         type: "multi",
         text: "Что вы используете регулярно?",
         minSelected: 1,
@@ -147,6 +157,7 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
       },
       {
         id: "chronic_conditions",
+        section: "Хронические состояния",
         type: "multi",
         text: "Есть ли у вас следующие состояния?",
         minSelected: 1,
@@ -170,6 +181,7 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
       },
       {
         id: "medications",
+        section: "Препараты",
         type: "multi",
         text: "Принимаете ли вы постоянно препараты?",
         minSelected: 1,
@@ -193,21 +205,25 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
     questions: [
       {
         id: "mood",
+        section: "Самочувствие",
         type: "scale_1_10",
         text: "Настроение от 1 до 10",
       },
       {
         id: "energy",
+        section: "Самочувствие",
         type: "scale_1_10",
         text: "Энергия от 1 до 10",
       },
       {
         id: "stress",
+        section: "Самочувствие",
         type: "scale_1_10",
         text: "Стресс от 1 до 10",
       },
       {
         id: "sleep_duration",
+        section: "Сон",
         type: "single",
         text: "Сон",
         options: [
@@ -220,6 +236,7 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
       },
       {
         id: "skin_today",
+        section: "Кожа",
         type: "multi",
         text: "Кожа сегодня",
         minSelected: 1,
@@ -235,16 +252,19 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
       },
       {
         id: "self_like",
+        section: "Восприятие себя",
         type: "scale_1_10",
         text: "Сегодня я себе нравлюсь от 1 до 10",
       },
       {
         id: "feel_beautiful",
+        section: "Восприятие себя",
         type: "scale_1_10",
         text: "Сегодня я чувствую себя красивой от 1 до 10",
       },
       {
         id: "sport_duration",
+        section: "Активность",
         type: "single",
         text: "Спорт",
         options: [
@@ -256,6 +276,7 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
       },
       {
         id: "skincare_today",
+        section: "Уход",
         type: "multi",
         text: "Что использовала сегодня",
         minSelected: 1,
@@ -272,6 +293,7 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
       },
       {
         id: "cycle_today",
+        section: "Цикл",
         type: "multi",
         text: "Сегодня",
         minSelected: 1,
@@ -285,6 +307,7 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
       },
       {
         id: "daily_influence",
+        section: "Главный фактор дня",
         type: "single",
         text: "Что сегодня больше всего повлияло на ваше самочувствие?",
         options: [
@@ -308,6 +331,7 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
     questions: [
       {
         id: "weight",
+        section: "Еженедельный чек-ин",
         type: "number",
         text: "Вес",
         min: 1,
@@ -315,26 +339,31 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
       },
       {
         id: "bloating",
+        section: "Еженедельный чек-ин",
         type: "scale_1_10",
         text: "Вздутие от 1 до 10",
       },
       {
         id: "libido",
+        section: "Еженедельный чек-ин",
         type: "scale_1_10",
         text: "Либидо от 1 до 10",
       },
       {
         id: "appearance_satisfaction",
+        section: "Еженедельный чек-ин",
         type: "scale_1_10",
         text: "Удовлетворенность внешностью от 1 до 10",
       },
       {
         id: "life_satisfaction",
+        section: "Еженедельный чек-ин",
         type: "scale_1_10",
         text: "Удовлетворенность жизнью от 1 до 10",
       },
       {
         id: "face_photo",
+        section: "Фото",
         type: "photo",
         text: "Фото лица",
       },
@@ -347,6 +376,8 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
     questions: [
       {
         id: "monthly_labs",
+        required: false,
+        section: "Анализы",
         type: "lab_panel",
         text: "Анализы за месяц",
         fields: [

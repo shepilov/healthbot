@@ -1,11 +1,11 @@
 import type { EventBus, EventStore } from "../domain/index.js";
+import { getPeriodKey } from "../domain/index.js";
 import { createDomainEvent } from "../domain/index.js";
 import type {
   AnswerRecordedPayload,
   AnswerRejectedPayload,
   AnswerValue,
   ChatId,
-  CheckInPeriod,
   DomainEvent,
   DomainEventPayloads,
   QuestionId,
@@ -16,11 +16,13 @@ import type {
 import type { ActiveFlowStore } from "./active-flow-store.js";
 import type {
   ActiveQuestionnaireFlow,
+  AnswerMap,
   LabPanelQuestion,
   MultiQuestion,
   NumberQuestion,
   PhotoQuestion,
   QuestionDefinition,
+  QuestionnaireProgress,
   QuestionnaireAnswerInput,
   QuestionnaireDefinition,
   ScaleQuestion,
@@ -32,21 +34,26 @@ export type QuestionnaireEngineStatus =
   | "answered"
   | "cancelled"
   | "completed"
+  | "moved_back"
   | "multi_selection_changed"
   | "no_active_flow"
   | "rejected"
   | "started";
 
 export interface QuestionnaireEngineResult {
+  readonly answers?: AnswerMap;
   readonly events: readonly DomainEvent[];
   readonly flow?: ActiveQuestionnaireFlow;
+  readonly progress?: QuestionnaireProgress;
   readonly question?: QuestionDefinition;
+  readonly questionnaire?: QuestionnaireDefinition;
   readonly status: QuestionnaireEngineStatus;
   readonly validationError?: string;
 }
 
 export interface ActiveQuestionnaireResult {
   readonly flow: ActiveQuestionnaireFlow;
+  readonly progress: QuestionnaireProgress;
   readonly question: QuestionDefinition;
   readonly questionnaire: QuestionnaireDefinition;
 }
@@ -64,6 +71,10 @@ export interface AnswerQuestionnaireInput {
 
 export interface CancelQuestionnaireInput {
   readonly reason?: string;
+  readonly userId: UserId;
+}
+
+export interface BackQuestionnaireInput {
   readonly userId: UserId;
 }
 
@@ -145,7 +156,9 @@ export class QuestionnaireEngine {
       await this.emit(events);
 
       return {
+        answers: {},
         events,
+        questionnaire,
         status: "completed",
       };
     }
@@ -157,6 +170,7 @@ export class QuestionnaireEngine {
     return {
       events: [started],
       flow,
+      progress: this.getQuestionProgress(questionnaire, firstQuestion.id, {}),
       question: firstQuestion,
       status: "started",
     };
@@ -192,6 +206,11 @@ export class QuestionnaireEngine {
       return {
         events: [],
         flow: nextFlow,
+        progress: this.getQuestionProgress(
+          questionnaire,
+          question.id,
+          flow.answers,
+        ),
         question,
         status: "multi_selection_changed",
       };
@@ -208,6 +227,11 @@ export class QuestionnaireEngine {
       return {
         events: [rejected],
         flow,
+        progress: this.getQuestionProgress(
+          questionnaire,
+          question.id,
+          flow.answers,
+        ),
         question,
         status: "rejected",
         validationError: validation.reason,
@@ -239,7 +263,9 @@ export class QuestionnaireEngine {
       await this.emit(events);
 
       return {
+        answers,
         events,
+        questionnaire,
         status: "completed",
       };
     }
@@ -255,6 +281,11 @@ export class QuestionnaireEngine {
     return {
       events: answerEvents,
       flow: nextFlow,
+      progress: this.getQuestionProgress(
+        questionnaire,
+        nextQuestion.id,
+        answers,
+      ),
       question: nextQuestion,
       status: "answered",
     };
@@ -274,8 +305,72 @@ export class QuestionnaireEngine {
 
     return {
       flow,
+      progress: this.getQuestionProgress(
+        questionnaire,
+        question.id,
+        flow.answers,
+      ),
       question,
       questionnaire,
+    };
+  }
+
+  async back({
+    userId,
+  }: BackQuestionnaireInput): Promise<QuestionnaireEngineResult> {
+    const flow = await this.activeFlowStore.get(userId);
+
+    if (flow === undefined) {
+      return {
+        events: [],
+        status: "no_active_flow",
+      };
+    }
+
+    const questionnaire = this.getQuestionnaire(flow.questionnaireId);
+    const currentQuestion = this.getQuestion(
+      questionnaire,
+      flow.currentQuestionId,
+    );
+    const previousQuestion = this.findPreviousVisibleQuestion(
+      questionnaire,
+      flow.currentQuestionId,
+      flow.answers,
+    );
+
+    if (previousQuestion === undefined) {
+      return {
+        events: [],
+        flow,
+        progress: this.getQuestionProgress(
+          questionnaire,
+          currentQuestion.id,
+          flow.answers,
+        ),
+        question: currentQuestion,
+        status: "moved_back",
+      };
+    }
+
+    const nextAnswers = omitAnswer(flow.answers, previousQuestion.id);
+    const nextFlow = {
+      ...flow,
+      answers: nextAnswers,
+      currentQuestionId: previousQuestion.id,
+    };
+
+    await this.activeFlowStore.set(nextFlow);
+
+    return {
+      events: [],
+      flow: nextFlow,
+      progress: this.getQuestionProgress(
+        questionnaire,
+        previousQuestion.id,
+        nextAnswers,
+      ),
+      question: previousQuestion,
+      status: "moved_back",
     };
   }
 
@@ -468,6 +563,43 @@ export class QuestionnaireEngine {
     return undefined;
   }
 
+  private findPreviousVisibleQuestion(
+    questionnaire: QuestionnaireDefinition,
+    currentQuestionId: QuestionId,
+    answers: ActiveQuestionnaireFlow["answers"],
+  ): QuestionDefinition | undefined {
+    const visibleQuestions = questionnaire.questions.filter((question) =>
+      isQuestionVisible(question, answers),
+    );
+    const currentIndex = visibleQuestions.findIndex(
+      (question) => question.id === currentQuestionId,
+    );
+
+    if (currentIndex <= 0) {
+      return undefined;
+    }
+
+    return visibleQuestions[currentIndex - 1];
+  }
+
+  private getQuestionProgress(
+    questionnaire: QuestionnaireDefinition,
+    currentQuestionId: QuestionId,
+    answers: ActiveQuestionnaireFlow["answers"],
+  ): QuestionnaireProgress {
+    const visibleQuestions = questionnaire.questions.filter((question) =>
+      isQuestionVisible(question, answers),
+    );
+    const currentIndex = visibleQuestions.findIndex(
+      (question) => question.id === currentQuestionId,
+    );
+
+    return {
+      current: currentIndex < 0 ? 1 : currentIndex + 1,
+      total: visibleQuestions.length,
+    };
+  }
+
   private getQuestion(
     questionnaire: QuestionnaireDefinition,
     questionId: QuestionId,
@@ -500,6 +632,10 @@ export class QuestionnaireEngine {
     input: QuestionnaireAnswerInput,
     flow: ActiveQuestionnaireFlow,
   ): ValidationResult {
+    if (input.type === "skip") {
+      return validateSkipAnswer(question);
+    }
+
     switch (question.type) {
       case "lab_panel":
         return validateLabPanelAnswer(question, input);
@@ -517,46 +653,6 @@ export class QuestionnaireEngine {
         return validateTextAnswer(question, input);
     }
   }
-}
-
-function getPeriodKey(period: CheckInPeriod, date: Date): string {
-  switch (period) {
-    case "daily":
-      return formatLocalDateKey(date);
-    case "monthly":
-      return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}`;
-    case "weekly":
-      return formatLocalIsoWeekKey(date);
-  }
-}
-
-function formatLocalDateKey(date: Date): string {
-  return [
-    date.getFullYear(),
-    pad2(date.getMonth() + 1),
-    pad2(date.getDate()),
-  ].join("-");
-}
-
-function formatLocalIsoWeekKey(date: Date): string {
-  const weekDate = new Date(
-    date.getFullYear(),
-    date.getMonth(),
-    date.getDate(),
-  );
-  const day = weekDate.getDay() === 0 ? 7 : weekDate.getDay();
-  weekDate.setDate(weekDate.getDate() + 4 - day);
-
-  const yearStart = new Date(weekDate.getFullYear(), 0, 1);
-  const daysSinceYearStart =
-    Math.floor((weekDate.getTime() - yearStart.getTime()) / 86_400_000) + 1;
-  const week = Math.ceil(daysSinceYearStart / 7);
-
-  return `${weekDate.getFullYear()}-W${pad2(week)}`;
-}
-
-function pad2(value: number): string {
-  return String(value).padStart(2, "0");
 }
 
 function isQuestionVisible(
@@ -578,37 +674,72 @@ function isQuestionVisible(
   });
 }
 
+function omitAnswer(
+  answers: ActiveQuestionnaireFlow["answers"],
+  questionId: QuestionId,
+): ActiveQuestionnaireFlow["answers"] {
+  const nextAnswers: Record<QuestionId, AnswerValue> = {};
+
+  for (const [candidateQuestionId, answer] of Object.entries(answers)) {
+    if (candidateQuestionId !== questionId) {
+      nextAnswers[candidateQuestionId] = answer;
+    }
+  }
+
+  return nextAnswers;
+}
+
 function validateTextAnswer(
   question: TextQuestion,
   input: QuestionnaireAnswerInput,
 ): ValidationResult {
   if (input.type !== "text") {
-    return invalid(`Expected text input, received ${input.type}`);
+    return invalid("Введите текст");
   }
 
   const shouldTrim = question.trim ?? true;
   const value = shouldTrim ? input.value.trim() : input.value;
 
   if ((question.required ?? true) && value.length === 0) {
-    return invalid("Answer is required", input.value);
+    return invalid("Ответ обязателен", input.value);
   }
 
   if (question.minLength !== undefined && value.length < question.minLength) {
     return invalid(
-      `Text must be at least ${question.minLength} characters`,
+      `Текст должен быть не короче ${question.minLength} символов`,
       value,
     );
   }
 
   if (question.maxLength !== undefined && value.length > question.maxLength) {
     return invalid(
-      `Text must be at most ${question.maxLength} characters`,
+      `Текст должен быть не длиннее ${question.maxLength} символов`,
       value,
     );
   }
 
   return {
     answer: value,
+    kind: "valid",
+  };
+}
+
+function validateSkipAnswer(question: QuestionDefinition): ValidationResult {
+  if (question.required !== false) {
+    return invalid("Этот вопрос обязателен");
+  }
+
+  if (question.type === "lab_panel") {
+    return {
+      answer: Object.fromEntries(
+        question.fields.map((field) => [field.id, null]),
+      ),
+      kind: "valid",
+    };
+  }
+
+  return {
+    answer: null,
     kind: "valid",
   };
 }
@@ -633,18 +764,21 @@ function validateScaleAnswer(
   const parsed = parseNumberInput(input);
 
   if (!parsed.ok) {
-    return invalid(parsed.reason, parsed.rawInput);
+    return invalid("Выберите число от 1 до 10", parsed.rawInput);
   }
 
-  return validateNumberConstraints(
-    {
-      ...question,
-      integer: true,
-      max: 10,
-      min: 1,
-    },
-    parsed.value,
-  );
+  if (
+    !Number.isInteger(parsed.value) ||
+    parsed.value < 1 ||
+    parsed.value > 10
+  ) {
+    return invalid("Выберите число от 1 до 10", String(parsed.value));
+  }
+
+  return {
+    answer: parsed.value,
+    kind: "valid",
+  };
 }
 
 function validateSingleAnswer(
@@ -652,7 +786,7 @@ function validateSingleAnswer(
   input: QuestionnaireAnswerInput,
 ): ValidationResult {
   if (input.type !== "single") {
-    return invalid(`Expected single choice input, received ${input.type}`);
+    return invalid("Выберите один вариант кнопкой");
   }
 
   const option = question.options.find(
@@ -660,7 +794,7 @@ function validateSingleAnswer(
   );
 
   if (option === undefined) {
-    return invalid(`Unknown option: ${input.optionId}`, input.optionId);
+    return invalid("Выберите вариант из списка", input.optionId);
   }
 
   return {
@@ -682,7 +816,7 @@ function validateMultiAnswer(
     );
 
     if (option === undefined) {
-      return invalid(`Unknown option: ${input.optionId}`, input.optionId);
+      return invalid("Выберите вариант из списка", input.optionId);
     }
 
     const isSelected = selectedOptionIds.includes(input.optionId);
@@ -696,7 +830,7 @@ function validateMultiAnswer(
       nextSelectedOptionIds.length > question.maxSelected
     ) {
       return invalid(
-        `Select at most ${question.maxSelected} option(s)`,
+        `Выберите не больше ${question.maxSelected} вариантов`,
         input.optionId,
       );
     }
@@ -708,14 +842,14 @@ function validateMultiAnswer(
   }
 
   if (input.type !== "multi_done") {
-    return invalid(`Expected multi-select input, received ${input.type}`);
+    return invalid("Выберите один или несколько вариантов кнопками");
   }
 
   const minSelected =
     question.minSelected ?? (question.required === false ? 0 : 1);
 
   if (selectedOptionIds.length < minSelected) {
-    return invalid(`Select at least ${minSelected} option(s)`);
+    return invalid(`Выберите минимум ${minSelected} вариант`);
   }
 
   const answer = selectedOptionIds.map((optionId) => {
@@ -747,7 +881,7 @@ function validatePhotoAnswer(
   const fileId = input.fileId.trim();
 
   if (fileId.length === 0) {
-    return invalid("Photo file id is required");
+    return invalid("Загрузите фото или отмените анкету командой /cancel");
   }
 
   return {
@@ -766,7 +900,7 @@ function validateLabPanelAnswer(
   input: QuestionnaireAnswerInput,
 ): ValidationResult {
   if (input.type !== "lab_panel") {
-    return invalid(`Expected lab panel input, received ${input.type}`);
+    return invalid("Введите значения анализов или отправьте: пропустить");
   }
 
   const answer: Record<string, number | null> = {};
@@ -776,7 +910,7 @@ function validateLabPanelAnswer(
 
     if (rawValue === null || rawValue === undefined || rawValue === "") {
       if (field.required === true) {
-        return invalid(`${field.label} is required`);
+        return invalid(`${field.label}: значение обязательно`);
       }
 
       answer[field.id] = null;
@@ -816,7 +950,7 @@ function parseNumberInput(input: QuestionnaireAnswerInput): NumberParseResult {
   ) {
     return {
       ok: false,
-      reason: `Expected numeric input, received ${input.type}`,
+      reason: "Введите число",
     };
   }
 
@@ -835,7 +969,7 @@ function parseNumberValue(value: string | number): NumberParseResult {
     return {
       ok: false,
       rawInput: String(value),
-      reason: "Expected a finite number",
+      reason: "Введите число",
     };
   }
 
@@ -846,7 +980,7 @@ function parseNumberValue(value: string | number): NumberParseResult {
     return {
       ok: false,
       rawInput,
-      reason: "Expected a number",
+      reason: "Введите число",
     };
   }
 
@@ -856,7 +990,7 @@ function parseNumberValue(value: string | number): NumberParseResult {
     return {
       ok: false,
       rawInput,
-      reason: "Expected a number",
+      reason: "Введите число",
     };
   }
 
@@ -871,15 +1005,21 @@ function validateNumberConstraints(
   value: number,
 ): ValidationResult {
   if (question.integer === true && !Number.isInteger(value)) {
-    return invalid("Expected an integer", String(value));
+    return invalid("Введите целое число", String(value));
   }
 
   if (question.min !== undefined && value < question.min) {
-    return invalid(`Number must be at least ${question.min}`, String(value));
+    return invalid(
+      `Число должно быть не меньше ${question.min}`,
+      String(value),
+    );
   }
 
   if (question.max !== undefined && value > question.max) {
-    return invalid(`Number must be at most ${question.max}`, String(value));
+    return invalid(
+      `Число должно быть не больше ${question.max}`,
+      String(value),
+    );
   }
 
   return {

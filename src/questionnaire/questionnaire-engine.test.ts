@@ -215,6 +215,72 @@ describe("QuestionnaireEngine", () => {
     });
   });
 
+  it("moves back to the previous visible question and clears that answer", async () => {
+    const { activeFlowStore, engine } = createEngine();
+    await engine.start({ questionnaireId: "sample", userId: "user-1" });
+    await engine.answer({
+      userId: "user-1",
+      input: {
+        type: "single",
+        optionId: "yes",
+      },
+    });
+    await engine.answer({
+      userId: "user-1",
+      input: {
+        type: "number",
+        value: 28,
+      },
+    });
+
+    const result = await engine.back({ userId: "user-1" });
+
+    expect(result).toMatchObject({
+      question: { id: "cycle_length" },
+      status: "moved_back",
+    });
+    await expect(activeFlowStore.get("user-1")).resolves.toMatchObject({
+      answers: {
+        cycle_status: "yes",
+      },
+      currentQuestionId: "cycle_length",
+    });
+  });
+
+  it("records skipped optional questions explicitly", async () => {
+    const { eventStore, engine } = createEngine();
+    await engine.start({ questionnaireId: "sample", userId: "user-1" });
+    await engine.answer({
+      userId: "user-1",
+      input: {
+        type: "single",
+        optionId: "no",
+      },
+    });
+
+    const result = await engine.answer({
+      userId: "user-1",
+      input: {
+        type: "skip",
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+    });
+    await expect(eventStore.loadByUser("user-1")).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            answer: null,
+            questionId: "notes",
+          }),
+          type: "AnswerRecorded",
+        }),
+      ]),
+    );
+  });
+
   it("emits photo-specific and answer events for photo questions", async () => {
     const { engine } = createEngine([
       {

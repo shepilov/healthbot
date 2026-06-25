@@ -75,6 +75,54 @@ describe("default profile questionnaire", () => {
     });
   });
 
+  it("reports progress based on currently visible profile questions", async () => {
+    const { engine } = createProfileEngine();
+
+    await expect(
+      engine.start({
+        questionnaireId: PROFILE_QUESTIONNAIRE_ID,
+        userId: "user-1",
+      }),
+    ).resolves.toMatchObject({
+      progress: {
+        current: 1,
+        total: 10,
+      },
+      question: { id: "age" },
+    });
+    await engine.answer({
+      userId: "user-1",
+      input: { type: "number", value: 35 },
+    });
+    await engine.answer({
+      userId: "user-1",
+      input: { type: "number", value: 170 },
+    });
+
+    await expect(
+      engine.answer({
+        userId: "user-1",
+        input: { type: "number", value: 65 },
+      }),
+    ).resolves.toMatchObject({
+      progress: {
+        current: 4,
+        total: 10,
+      },
+      question: { id: "main_goal" },
+    });
+
+    await answerMulti(engine, "skin");
+
+    await expect(answerSingle(engine, "regular_cycle")).resolves.toMatchObject({
+      progress: {
+        current: 6,
+        total: 12,
+      },
+      question: { id: "cycle_length" },
+    });
+  });
+
   it("skips cycle length and PMS questions when cycle is not applicable", async () => {
     const { engine } = createProfileEngine();
 
@@ -550,7 +598,7 @@ describe("default monthly questionnaire", () => {
     ).resolves.toMatchObject({
       question: { id: "monthly_labs" },
       status: "rejected",
-      validationError: "Ферритин: Expected a number",
+      validationError: "Ферритин: Введите число",
     });
   });
 });

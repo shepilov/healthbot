@@ -26,6 +26,7 @@ export interface QuestionOption {
 interface BaseQuestion<TType extends string> {
   readonly id: QuestionId;
   readonly required?: boolean;
+  readonly section?: string;
   readonly text: string;
   readonly type: TType;
   readonly when?: QuestionVisibility;
@@ -88,6 +89,11 @@ export interface QuestionnaireDefinition {
   readonly title?: string;
 }
 
+export interface QuestionnaireProgress {
+  readonly current: number;
+  readonly total: number;
+}
+
 export interface ActiveQuestionnaireFlow {
   readonly answers: AnswerMap;
   readonly chatId?: ChatId;
@@ -102,6 +108,9 @@ export type QuestionnaireAnswerInput =
       readonly fileId: string;
       readonly fileUniqueId?: string;
       readonly type: "photo";
+    }
+  | {
+      readonly type: "skip";
     }
   | {
       readonly optionId: string;

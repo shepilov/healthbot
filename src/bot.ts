@@ -8,6 +8,7 @@ import { registerTelegramHandlers } from "./telegram/adapter.js";
 export interface HealthBotDependencies {
   app?: HealthBotApp;
   botInfo?: UserFromGetMe;
+  clock?: () => Date;
   logger: Logger;
   token: string;
 }
@@ -15,6 +16,7 @@ export interface HealthBotDependencies {
 export function createHealthBot({
   app = createInMemoryHealthBotApp(),
   botInfo,
+  clock,
   logger,
   token,
 }: HealthBotDependencies): Bot {
@@ -29,6 +31,7 @@ export function createHealthBot({
 
   registerTelegramHandlers(bot, {
     activeFlowStore: app.activeFlowStore,
+    ...(clock === undefined ? {} : { clock }),
     eventStore: app.eventStore,
     logger,
     questionnaireEngine: app.questionnaireEngine,

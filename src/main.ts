@@ -3,6 +3,7 @@ import "dotenv/config";
 import { createHealthBot } from "./bot.js";
 import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
+import { configureTelegramCommands } from "./telegram/adapter.js";
 
 const config = loadConfig(process.env);
 const logger = createLogger(config);
@@ -24,6 +25,7 @@ process.once("SIGTERM", () => {
 logger.info("starting telegram bot in long-polling mode");
 
 try {
+  await configureTelegramCommands(bot);
   await bot.start({
     allowed_updates: ["message", "callback_query"],
   });
