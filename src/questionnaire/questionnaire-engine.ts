@@ -741,7 +741,7 @@ function validatePhotoAnswer(
   input: QuestionnaireAnswerInput,
 ): ValidationResult {
   if (input.type !== "photo") {
-    return invalid(`Expected photo input, received ${input.type}`);
+    return invalid("Загрузите фото или отмените анкету командой /cancel");
   }
 
   const fileId = input.fileId.trim();

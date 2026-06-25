@@ -338,7 +338,6 @@ async function handlePhotoMessage(
   const result = await dependencies.questionnaireEngine.answer({
     input: {
       fileId: photo.file_id,
-      fileUniqueId: photo.file_unique_id,
       type: "photo",
     },
     userId: identity.userId,
@@ -670,7 +669,7 @@ function renderQuestion(
       };
     case "photo":
       return {
-        text: `${question.text}\n\nЗагрузите фото.`,
+        text: `${question.text}\n\nЗагрузите фото или отмените анкету командой /cancel.`,
       };
     case "scale_1_10":
       return {

@@ -303,6 +303,7 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
   },
   {
     id: WEEKLY_QUESTIONNAIRE_ID,
+    period: "weekly",
     title: "Еженедельный чек-ин",
     questions: [
       {
@@ -311,6 +312,31 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
         text: "Вес",
         min: 1,
         max: 500,
+      },
+      {
+        id: "bloating",
+        type: "scale_1_10",
+        text: "Вздутие от 1 до 10",
+      },
+      {
+        id: "libido",
+        type: "scale_1_10",
+        text: "Либидо от 1 до 10",
+      },
+      {
+        id: "appearance_satisfaction",
+        type: "scale_1_10",
+        text: "Удовлетворенность внешностью от 1 до 10",
+      },
+      {
+        id: "life_satisfaction",
+        type: "scale_1_10",
+        text: "Удовлетворенность жизнью от 1 до 10",
+      },
+      {
+        id: "face_photo",
+        type: "photo",
+        text: "Фото лица",
       },
     ],
   },

@@ -303,10 +303,10 @@ describe("Telegram adapter", () => {
     });
   });
 
-  it("records only Telegram photo identifiers for photo answers", async () => {
+  it("records only Telegram file_id for photo answers", async () => {
     const questionnaires: readonly QuestionnaireDefinition[] = [
       {
-        id: "profile",
+        id: "weekly",
         questions: [
           {
             id: "face_photo",
@@ -325,7 +325,7 @@ describe("Telegram adapter", () => {
     });
     installTelegramApiMock(bot);
 
-    await bot.handleUpdate(messageUpdate(1, "/profile"));
+    await bot.handleUpdate(messageUpdate(1, "/weekly"));
     await bot.handleUpdate({
       update_id: 2,
       message: {
@@ -350,13 +350,14 @@ describe("Telegram adapter", () => {
       },
     } satisfies Update);
 
-    await expect(app.eventStore.loadByUser("200")).resolves.toMatchObject([
+    const events = await app.eventStore.loadByUser("200");
+
+    expect(events).toMatchObject([
       { type: "QuestionnaireStarted" },
       {
         type: "PhotoReceived",
         payload: {
           fileId: "large-file",
-          fileUniqueId: "large-unique",
         },
       },
       {
@@ -364,12 +365,55 @@ describe("Telegram adapter", () => {
         payload: {
           answer: {
             fileId: "large-file",
-            fileUniqueId: "large-unique",
           },
         },
       },
       { type: "QuestionnaireCompleted" },
     ]);
+    expect(
+      events.find((event) => event.type === "PhotoReceived")?.payload,
+    ).not.toHaveProperty("fileUniqueId");
+    expect(
+      events.find((event) => event.type === "AnswerRecorded")?.payload,
+    ).toMatchObject({
+      answer: expect.not.objectContaining({
+        fileUniqueId: expect.any(String),
+      }),
+    });
+  });
+
+  it("asks for a photo or cancellation when text is sent at a photo step", async () => {
+    const questionnaires: readonly QuestionnaireDefinition[] = [
+      {
+        id: "weekly",
+        questions: [
+          {
+            id: "face_photo",
+            text: "Фото лица",
+            type: "photo",
+          },
+        ],
+      },
+    ];
+    const app = createInMemoryHealthBotApp({ questionnaires });
+    const bot = createHealthBot({
+      app,
+      botInfo: testBotInfo,
+      logger: pino({ enabled: false }),
+      token: "123456:test-token",
+    });
+    const calls = installTelegramApiMock(bot);
+
+    await bot.handleUpdate(messageUpdate(1, "/weekly"));
+    calls.length = 0;
+    await bot.handleUpdate(messageUpdate(2, "не фото"));
+
+    expect(
+      findMessageContaining(calls, "Загрузите фото или отмените")?.payload,
+    ).toBeDefined();
+    await expect(app.activeFlowStore.get("200")).resolves.toMatchObject({
+      currentQuestionId: "face_photo",
+    });
   });
 });
 

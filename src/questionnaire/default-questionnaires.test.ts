@@ -6,6 +6,7 @@ import {
   DAILY_QUESTIONNAIRE_ID,
   defaultQuestionnaires,
   PROFILE_QUESTIONNAIRE_ID,
+  WEEKLY_QUESTIONNAIRE_ID,
 } from "./default-questionnaires.js";
 
 describe("default profile questionnaire", () => {
@@ -240,6 +241,139 @@ describe("default daily questionnaire", () => {
   });
 });
 
+describe("default weekly questionnaire", () => {
+  it("contains the full weekly check-in sequence", () => {
+    const weekly = getWeeklyQuestionnaire();
+
+    expect(weekly.period).toBe("weekly");
+    expect(weekly.questions.map((question) => question.id)).toEqual([
+      "weight",
+      "bloating",
+      "libido",
+      "appearance_satisfaction",
+      "life_satisfaction",
+      "face_photo",
+    ]);
+  });
+
+  it("rejects invalid numeric, scale, and photo answers", async () => {
+    const { engine } = createDefaultQuestionnaireEngine();
+
+    await engine.start({
+      questionnaireId: WEEKLY_QUESTIONNAIRE_ID,
+      userId: "user-1",
+    });
+
+    await expect(
+      engine.answer({
+        userId: "user-1",
+        input: {
+          type: "text",
+          value: "abc",
+        },
+      }),
+    ).resolves.toMatchObject({
+      question: { id: "weight" },
+      status: "rejected",
+    });
+
+    await answerNumber(engine, 65);
+
+    await expect(answerScale(engine, 11)).resolves.toMatchObject({
+      question: { id: "bloating" },
+      status: "rejected",
+    });
+
+    await answerScale(engine, 6);
+    await answerScale(engine, 7);
+    await answerScale(engine, 8);
+    await answerScale(engine, 9);
+
+    await expect(
+      engine.answer({
+        userId: "user-1",
+        input: {
+          type: "text",
+          value: "not a photo",
+        },
+      }),
+    ).resolves.toMatchObject({
+      question: { id: "face_photo" },
+      status: "rejected",
+      validationError: "Загрузите фото или отмените анкету командой /cancel",
+    });
+  });
+
+  it("completes the weekly flow and emits a weekly period completion event", async () => {
+    const { engine, eventStore } = createDefaultQuestionnaireEngine({
+      clock: () => new Date(2026, 0, 1, 12, 0, 0),
+    });
+
+    await engine.start({
+      questionnaireId: WEEKLY_QUESTIONNAIRE_ID,
+      userId: "user-1",
+    });
+    await answerNumber(engine, 65);
+    await answerScale(engine, 6);
+    await answerScale(engine, 7);
+    await answerScale(engine, 8);
+    await answerScale(engine, 9);
+    const result = await answerPhoto(engine, "telegram-file-id");
+
+    expect(result).toMatchObject({
+      status: "completed",
+      events: [
+        {
+          payload: {
+            fileId: "telegram-file-id",
+            questionId: "face_photo",
+            questionnaireId: WEEKLY_QUESTIONNAIRE_ID,
+          },
+          type: "PhotoReceived",
+        },
+        {
+          payload: {
+            answer: {
+              fileId: "telegram-file-id",
+            },
+            questionId: "face_photo",
+            questionnaireId: WEEKLY_QUESTIONNAIRE_ID,
+          },
+          type: "AnswerRecorded",
+        },
+        {
+          payload: {
+            questionnaireId: WEEKLY_QUESTIONNAIRE_ID,
+          },
+          type: "QuestionnaireCompleted",
+        },
+        {
+          payload: {
+            period: "weekly",
+            periodKey: "2026-W01",
+            questionnaireId: WEEKLY_QUESTIONNAIRE_ID,
+          },
+          type: "PeriodCheckInCompleted",
+        },
+      ],
+    });
+
+    const events = await eventStore.loadByUser("user-1");
+    expect(
+      events
+        .filter((event) => event.type === "AnswerRecorded")
+        .map((event) => event.payload.questionId),
+    ).toEqual([
+      "weight",
+      "bloating",
+      "libido",
+      "appearance_satisfaction",
+      "life_satisfaction",
+      "face_photo",
+    ]);
+  });
+});
+
 function createProfileEngine() {
   return createDefaultQuestionnaireEngine();
 }
@@ -302,6 +436,26 @@ async function answerScale(engine: QuestionnaireEngine, value: number) {
   });
 }
 
+async function answerNumber(engine: QuestionnaireEngine, value: number) {
+  return engine.answer({
+    userId: "user-1",
+    input: {
+      type: "number",
+      value,
+    },
+  });
+}
+
+async function answerPhoto(engine: QuestionnaireEngine, fileId: string) {
+  return engine.answer({
+    userId: "user-1",
+    input: {
+      fileId,
+      type: "photo",
+    },
+  });
+}
+
 async function answerMulti(engine: QuestionnaireEngine, optionId: string) {
   await engine.answer({
     userId: "user-1",
@@ -341,4 +495,16 @@ function getDailyQuestionnaire() {
   }
 
   return daily;
+}
+
+function getWeeklyQuestionnaire() {
+  const weekly = defaultQuestionnaires.find(
+    (questionnaire) => questionnaire.id === WEEKLY_QUESTIONNAIRE_ID,
+  );
+
+  if (weekly === undefined) {
+    throw new Error("Weekly questionnaire is missing");
+  }
+
+  return weekly;
 }
