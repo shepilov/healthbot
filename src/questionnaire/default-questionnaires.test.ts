@@ -15,7 +15,6 @@ describe("default profile questionnaire", () => {
       "age",
       "height",
       "weight",
-      "country",
       "main_goal",
       "menstrual_status",
       "cycle_length",
@@ -165,14 +164,9 @@ async function answerProfileBasics(engine: QuestionnaireEngine) {
     userId: "user-1",
     input: { type: "number", value: 170 },
   });
-  await engine.answer({
-    userId: "user-1",
-    input: { type: "number", value: 65 },
-  });
-
   return engine.answer({
     userId: "user-1",
-    input: { type: "text", value: "France" },
+    input: { type: "number", value: 65 },
   });
 }
 

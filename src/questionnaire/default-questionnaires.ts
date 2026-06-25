@@ -34,13 +34,6 @@ export const defaultQuestionnaires: readonly QuestionnaireDefinition[] = [
         max: 500,
       },
       {
-        id: "country",
-        type: "text",
-        text: "Страна проживания",
-        minLength: 2,
-        maxLength: 80,
-      },
-      {
         id: "main_goal",
         type: "multi",
         text: "Что вас беспокоит больше всего?",

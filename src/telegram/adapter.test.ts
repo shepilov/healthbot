@@ -190,8 +190,8 @@ describe("Telegram adapter", () => {
               ],
             },
             {
-              id: "country",
-              text: "Страна проживания",
+              id: "notes",
+              text: "Комментарий",
               type: "text",
             },
           ],
@@ -213,10 +213,8 @@ describe("Telegram adapter", () => {
     expect(
       findMessageContaining(calls, "Ваш ответ: Нормальная")?.payload,
     ).toBeDefined();
-    expect(
-      findMessageContaining(calls, "Страна проживания")?.payload,
-    ).toBeDefined();
-    expect(findEditContaining(calls, "Страна проживания")).toBeUndefined();
+    expect(findMessageContaining(calls, "Комментарий")?.payload).toBeDefined();
+    expect(findEditContaining(calls, "Комментарий")).toBeUndefined();
   });
 
   it("keeps one summary message per multi-select question", async () => {
