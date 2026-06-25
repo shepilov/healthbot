@@ -1,5 +1,7 @@
 # Healthbot
 
+[![CI](https://github.com/shepilov/healthbot/actions/workflows/ci.yml/badge.svg)](https://github.com/shepilov/healthbot/actions/workflows/ci.yml)
+
 Telegram health tracking bot MVP.
 
 The bot runs locally with Telegram long polling, stores data in memory, and uses
