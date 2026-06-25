@@ -91,7 +91,20 @@ describe("Telegram adapter", () => {
   });
 
   it("answers callback queries and records scale answers", async () => {
-    const app = createInMemoryHealthBotApp();
+    const app = createInMemoryHealthBotApp({
+      questionnaires: [
+        {
+          id: "daily",
+          questions: [
+            {
+              id: "mood",
+              text: "Настроение",
+              type: "scale_1_10",
+            },
+          ],
+        },
+      ],
+    });
     const bot = createHealthBot({
       app,
       botInfo: testBotInfo,

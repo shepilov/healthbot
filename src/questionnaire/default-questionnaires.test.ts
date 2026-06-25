@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { InMemoryEventStore } from "../domain/index.js";
 import { InMemoryActiveFlowStore, QuestionnaireEngine } from "./index.js";
 import {
+  DAILY_QUESTIONNAIRE_ID,
   defaultQuestionnaires,
   PROFILE_QUESTIONNAIRE_ID,
 } from "./default-questionnaires.js";
@@ -137,10 +138,121 @@ describe("default profile questionnaire", () => {
   });
 });
 
+describe("default daily questionnaire", () => {
+  it("contains the full daily check-in sequence", () => {
+    const daily = getDailyQuestionnaire();
+
+    expect(daily.period).toBe("daily");
+    expect(daily.questions.map((question) => question.id)).toEqual([
+      "mood",
+      "energy",
+      "stress",
+      "sleep_duration",
+      "skin_today",
+      "self_like",
+      "feel_beautiful",
+      "sport_duration",
+      "skincare_today",
+      "cycle_today",
+      "daily_influence",
+    ]);
+  });
+
+  it("completes the daily flow and emits a daily period completion event", async () => {
+    const { engine, eventStore } = createDefaultQuestionnaireEngine({
+      clock: () => new Date(2026, 5, 25, 12, 0, 0),
+    });
+
+    await engine.start({
+      questionnaireId: DAILY_QUESTIONNAIRE_ID,
+      userId: "user-1",
+    });
+    await answerScale(engine, 7);
+    await answerScale(engine, 6);
+    await answerScale(engine, 4);
+    await answerSingle(engine, "7_8");
+    await answerMulti(engine, "normal");
+    await answerScale(engine, 8);
+    await answerScale(engine, 7);
+    await answerSingle(engine, "under_30");
+    await answerMulti(engine, "spf");
+    await answerMulti(engine, "unknown");
+    const result = await answerSingle(engine, "sleep");
+
+    expect(result).toMatchObject({
+      status: "completed",
+      events: [
+        {
+          payload: {
+            answer: "sleep",
+            questionId: "daily_influence",
+            questionnaireId: DAILY_QUESTIONNAIRE_ID,
+          },
+          type: "AnswerRecorded",
+        },
+        {
+          payload: {
+            questionnaireId: DAILY_QUESTIONNAIRE_ID,
+          },
+          type: "QuestionnaireCompleted",
+        },
+        {
+          payload: {
+            period: "daily",
+            periodKey: "2026-06-25",
+            questionnaireId: DAILY_QUESTIONNAIRE_ID,
+          },
+          type: "PeriodCheckInCompleted",
+        },
+      ],
+    });
+
+    const events = await eventStore.loadByUser("user-1");
+    expect(
+      events
+        .filter((event) => event.type === "AnswerRecorded")
+        .map((event) => event.payload.questionId),
+    ).toEqual([
+      "mood",
+      "energy",
+      "stress",
+      "sleep_duration",
+      "skin_today",
+      "self_like",
+      "feel_beautiful",
+      "sport_duration",
+      "skincare_today",
+      "cycle_today",
+      "daily_influence",
+    ]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: {
+            period: "daily",
+            periodKey: "2026-06-25",
+            questionnaireId: DAILY_QUESTIONNAIRE_ID,
+          },
+          type: "PeriodCheckInCompleted",
+        }),
+      ]),
+    );
+  });
+});
+
 function createProfileEngine() {
+  return createDefaultQuestionnaireEngine();
+}
+
+function createDefaultQuestionnaireEngine({
+  clock,
+}: {
+  readonly clock?: () => Date;
+} = {}) {
   const eventStore = new InMemoryEventStore();
   const engine = new QuestionnaireEngine({
     activeFlowStore: new InMemoryActiveFlowStore(),
+    ...(clock === undefined ? {} : { clock }),
     eventStore,
     questionnaires: defaultQuestionnaires,
   });
@@ -180,6 +292,16 @@ async function answerSingle(engine: QuestionnaireEngine, optionId: string) {
   });
 }
 
+async function answerScale(engine: QuestionnaireEngine, value: number) {
+  return engine.answer({
+    userId: "user-1",
+    input: {
+      type: "scale_1_10",
+      value,
+    },
+  });
+}
+
 async function answerMulti(engine: QuestionnaireEngine, optionId: string) {
   await engine.answer({
     userId: "user-1",
@@ -207,4 +329,16 @@ function getProfileQuestionnaire() {
   }
 
   return profile;
+}
+
+function getDailyQuestionnaire() {
+  const daily = defaultQuestionnaires.find(
+    (questionnaire) => questionnaire.id === DAILY_QUESTIONNAIRE_ID,
+  );
+
+  if (daily === undefined) {
+    throw new Error("Daily questionnaire is missing");
+  }
+
+  return daily;
 }

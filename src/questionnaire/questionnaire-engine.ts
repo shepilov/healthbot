@@ -5,6 +5,7 @@ import type {
   AnswerRejectedPayload,
   AnswerValue,
   ChatId,
+  CheckInPeriod,
   DomainEvent,
   DomainEventPayloads,
   QuestionId,
@@ -68,6 +69,7 @@ export interface CancelQuestionnaireInput {
 
 export interface QuestionnaireEngineDependencies {
   readonly activeFlowStore: ActiveFlowStore;
+  readonly clock?: () => Date;
   readonly eventBus?: Pick<EventBus, "publish">;
   readonly eventStore?: Pick<EventStore, "append">;
   readonly questionnaires: readonly QuestionnaireDefinition[];
@@ -87,6 +89,7 @@ type ValidationResult =
 
 export class QuestionnaireEngine {
   private readonly activeFlowStore: ActiveFlowStore;
+  private readonly clock: () => Date;
   private readonly eventBus: Pick<EventBus, "publish"> | undefined;
   private readonly eventStore: Pick<EventStore, "append"> | undefined;
   private readonly questionnaires = new Map<
@@ -96,11 +99,13 @@ export class QuestionnaireEngine {
 
   constructor({
     activeFlowStore,
+    clock = () => new Date(),
     eventBus,
     eventStore,
     questionnaires,
   }: QuestionnaireEngineDependencies) {
     this.activeFlowStore = activeFlowStore;
+    this.clock = clock;
     this.eventBus = eventBus;
     this.eventStore = eventStore;
 
@@ -132,13 +137,10 @@ export class QuestionnaireEngine {
     );
 
     if (firstQuestion === undefined) {
-      const completed = this.createFlowEvent(input, {
-        type: "QuestionnaireCompleted",
-        payload: {
-          questionnaireId: questionnaire.id,
-        },
-      });
-      const events = [started, completed];
+      const events = [
+        started,
+        ...this.createQuestionnaireCompletionEvents(input, questionnaire),
+      ];
       await this.activeFlowStore.clear(input.userId);
       await this.emit(events);
 
@@ -229,13 +231,10 @@ export class QuestionnaireEngine {
     );
 
     if (nextQuestion === undefined) {
-      const completed = this.createFlowEvent(flow, {
-        type: "QuestionnaireCompleted",
-        payload: {
-          questionnaireId: questionnaire.id,
-        },
-      });
-      const events = [...answerEvents, completed];
+      const events = [
+        ...answerEvents,
+        ...this.createQuestionnaireCompletionEvents(flow, questionnaire),
+      ];
       await this.activeFlowStore.clear(userId);
       await this.emit(events);
 
@@ -380,6 +379,46 @@ export class QuestionnaireEngine {
     });
   }
 
+  private createQuestionnaireCompletionEvents(
+    flow: Pick<ActiveQuestionnaireFlow, "chatId" | "userId">,
+    questionnaire: QuestionnaireDefinition,
+  ): DomainEvent[] {
+    const completed = this.createFlowEvent(flow, {
+      type: "QuestionnaireCompleted",
+      payload: {
+        questionnaireId: questionnaire.id,
+      },
+    });
+    const periodCompleted = this.createPeriodCheckInCompletedEvent(
+      flow,
+      questionnaire,
+    );
+
+    if (periodCompleted === undefined) {
+      return [completed];
+    }
+
+    return [completed, periodCompleted];
+  }
+
+  private createPeriodCheckInCompletedEvent(
+    flow: Pick<ActiveQuestionnaireFlow, "chatId" | "userId">,
+    questionnaire: QuestionnaireDefinition,
+  ): DomainEvent<"PeriodCheckInCompleted"> | undefined {
+    if (questionnaire.period === undefined) {
+      return undefined;
+    }
+
+    return this.createFlowEvent(flow, {
+      type: "PeriodCheckInCompleted",
+      payload: {
+        period: questionnaire.period,
+        periodKey: getPeriodKey(questionnaire.period, this.clock()),
+        questionnaireId: questionnaire.id,
+      },
+    });
+  }
+
   private createFlowEvent<TType extends keyof DomainEventPayloads>(
     flow: Pick<ActiveQuestionnaireFlow, "chatId" | "userId">,
     input: {
@@ -478,6 +517,46 @@ export class QuestionnaireEngine {
         return validateTextAnswer(question, input);
     }
   }
+}
+
+function getPeriodKey(period: CheckInPeriod, date: Date): string {
+  switch (period) {
+    case "daily":
+      return formatLocalDateKey(date);
+    case "monthly":
+      return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}`;
+    case "weekly":
+      return formatLocalIsoWeekKey(date);
+  }
+}
+
+function formatLocalDateKey(date: Date): string {
+  return [
+    date.getFullYear(),
+    pad2(date.getMonth() + 1),
+    pad2(date.getDate()),
+  ].join("-");
+}
+
+function formatLocalIsoWeekKey(date: Date): string {
+  const weekDate = new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+  );
+  const day = weekDate.getDay() === 0 ? 7 : weekDate.getDay();
+  weekDate.setDate(weekDate.getDate() + 4 - day);
+
+  const yearStart = new Date(weekDate.getFullYear(), 0, 1);
+  const daysSinceYearStart =
+    Math.floor((weekDate.getTime() - yearStart.getTime()) / 86_400_000) + 1;
+  const week = Math.ceil(daysSinceYearStart / 7);
+
+  return `${weekDate.getFullYear()}-W${pad2(week)}`;
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
 }
 
 function isQuestionVisible(

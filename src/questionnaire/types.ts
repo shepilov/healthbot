@@ -1,6 +1,7 @@
 import type {
   AnswerValue,
   ChatId,
+  CheckInPeriod,
   QuestionId,
   QuestionnaireId,
   UserId,
@@ -81,6 +82,7 @@ export type QuestionDefinition =
 
 export interface QuestionnaireDefinition {
   readonly id: QuestionnaireId;
+  readonly period?: CheckInPeriod;
   readonly questions: readonly QuestionDefinition[];
   readonly title?: string;
 }
