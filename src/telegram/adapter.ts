@@ -39,36 +39,56 @@ interface RenderedQuestion {
   readonly text: string;
 }
 
+interface TelegramAdapterState {
+  readonly answerSummaryMessageIds: Map<string, number>;
+}
+
 export function registerTelegramHandlers(
   bot: Bot,
   dependencies: TelegramAdapterDependencies,
 ): void {
-  bot.command("start", async (ctx) => handleStart(ctx, dependencies));
+  const state: TelegramAdapterState = {
+    answerSummaryMessageIds: new Map(),
+  };
+
+  bot.command("start", async (ctx) => handleStart(ctx, dependencies, state));
   bot.command("profile", async (ctx) =>
-    startQuestionnaire(ctx, dependencies, PROFILE_QUESTIONNAIRE_ID),
+    startQuestionnaire(ctx, dependencies, state, PROFILE_QUESTIONNAIRE_ID),
   );
   bot.command("daily", async (ctx) =>
-    startQuestionnaire(ctx, dependencies, DAILY_QUESTIONNAIRE_ID),
+    startQuestionnaire(ctx, dependencies, state, DAILY_QUESTIONNAIRE_ID),
   );
   bot.command("weekly", async (ctx) =>
-    startQuestionnaire(ctx, dependencies, WEEKLY_QUESTIONNAIRE_ID),
+    startQuestionnaire(ctx, dependencies, state, WEEKLY_QUESTIONNAIRE_ID),
   );
   bot.command("monthly", async (ctx) =>
-    startQuestionnaire(ctx, dependencies, MONTHLY_QUESTIONNAIRE_ID),
+    startQuestionnaire(ctx, dependencies, state, MONTHLY_QUESTIONNAIRE_ID),
   );
   bot.command("status", async (ctx) => handleStatus(ctx, dependencies));
-  bot.command("cancel", async (ctx) => handleCancel(ctx, dependencies));
+  bot.command("cancel", async (ctx) => handleCancel(ctx, dependencies, state));
   bot.on("callback_query:data", async (ctx) => {
-    await ctx.answerCallbackQuery();
-    await handleCallback(ctx, dependencies);
+    await safelyAnswerCallbackQuery(ctx, dependencies.logger);
+    await handleCallback(ctx, dependencies, state);
   });
   bot.on("message:photo", async (ctx) => handlePhotoMessage(ctx, dependencies));
   bot.on("message:text", async (ctx) => handleTextMessage(ctx, dependencies));
 }
 
+async function safelyAnswerCallbackQuery(
+  ctx: Context,
+  logger: Logger,
+): Promise<void> {
+  try {
+    await ctx.answerCallbackQuery();
+  } catch (error) {
+    logger.warn({ err: error }, "failed to answer telegram callback query");
+  }
+}
+
 async function handleStart(
   ctx: Context,
   dependencies: TelegramAdapterDependencies,
+  state: TelegramAdapterState,
 ): Promise<void> {
   const identity = getIdentity(ctx);
 
@@ -83,7 +103,12 @@ async function handleStart(
   );
 
   if (!(await isProfileComplete(dependencies.eventStore, identity.userId))) {
-    await startQuestionnaire(ctx, dependencies, PROFILE_QUESTIONNAIRE_ID);
+    await startQuestionnaire(
+      ctx,
+      dependencies,
+      state,
+      PROFILE_QUESTIONNAIRE_ID,
+    );
     return;
   }
 
@@ -93,6 +118,7 @@ async function handleStart(
 async function startQuestionnaire(
   ctx: Context,
   dependencies: TelegramAdapterDependencies,
+  state: TelegramAdapterState,
   questionnaireId: QuestionnaireId,
 ): Promise<void> {
   const identity = getIdentity(ctx);
@@ -101,6 +127,8 @@ async function startQuestionnaire(
     await ctx.reply("Не удалось определить пользователя Telegram.");
     return;
   }
+
+  clearAnswerSummaryMessagesForUser(state, identity.userId);
 
   const result = await dependencies.questionnaireEngine.start({
     chatId: identity.chatId,
@@ -142,6 +170,7 @@ async function handleStatus(
 async function handleCancel(
   ctx: Context,
   dependencies: TelegramAdapterDependencies,
+  state: TelegramAdapterState,
 ): Promise<void> {
   const identity = getIdentity(ctx);
 
@@ -155,12 +184,14 @@ async function handleCancel(
     userId: identity.userId,
   });
 
+  clearAnswerSummaryMessagesForUser(state, identity.userId);
   await replyWithResult(ctx, result);
 }
 
 async function handleCallback(
   ctx: Context,
   dependencies: TelegramAdapterDependencies,
+  state: TelegramAdapterState,
 ): Promise<void> {
   const identity = getIdentity(ctx);
   const data = ctx.callbackQuery?.data;
@@ -177,12 +208,119 @@ async function handleCallback(
     return;
   }
 
+  const active = await dependencies.questionnaireEngine.getActiveQuestion(
+    identity.userId,
+  );
   const result = await dependencies.questionnaireEngine.answer({
     input,
     userId: identity.userId,
   });
+  const confirmationText = renderCallbackAnswerConfirmation(
+    active,
+    input,
+    result,
+  );
 
-  await editOrReplyWithResult(ctx, result);
+  if (confirmationText !== undefined) {
+    await upsertAnswerSummaryMessage(
+      ctx,
+      dependencies.logger,
+      identity,
+      state,
+      active,
+      confirmationText,
+    );
+  }
+
+  if (shouldEditCurrentQuestionMessage(result)) {
+    await editOrReplyWithResult(ctx, result);
+    return;
+  }
+
+  await removeCurrentQuestionKeyboard(ctx, dependencies.logger, active);
+  await replyWithResult(ctx, result);
+}
+
+async function upsertAnswerSummaryMessage(
+  ctx: Context,
+  logger: Logger,
+  identity: TelegramIdentity,
+  state: TelegramAdapterState,
+  active:
+    | Awaited<ReturnType<QuestionnaireEngine["getActiveQuestion"]>>
+    | undefined,
+  text: string,
+): Promise<void> {
+  if (active === undefined) {
+    await ctx.reply(text);
+    return;
+  }
+
+  const key = getAnswerSummaryMessageKey(identity.userId, active);
+  const existingMessageId = state.answerSummaryMessageIds.get(key);
+
+  if (existingMessageId !== undefined) {
+    try {
+      await ctx.api.editMessageText(
+        identity.telegramChatId,
+        existingMessageId,
+        text,
+      );
+      return;
+    } catch (error) {
+      logger.warn({ err: error }, "failed to edit answer summary message");
+      state.answerSummaryMessageIds.delete(key);
+    }
+  }
+
+  const message = await ctx.reply(text);
+  state.answerSummaryMessageIds.set(key, message.message_id);
+}
+
+function shouldEditCurrentQuestionMessage(
+  result: QuestionnaireEngineResult,
+): boolean {
+  return result.status === "multi_selection_changed";
+}
+
+async function removeCurrentQuestionKeyboard(
+  ctx: Context,
+  logger: Logger,
+  active:
+    | Awaited<ReturnType<QuestionnaireEngine["getActiveQuestion"]>>
+    | undefined,
+): Promise<void> {
+  if (ctx.callbackQuery?.message === undefined || active === undefined) {
+    return;
+  }
+
+  try {
+    await ctx.editMessageText(
+      renderQuestion(active.question, active.flow).text,
+    );
+  } catch (error) {
+    logger.warn({ err: error }, "failed to remove question keyboard");
+  }
+}
+
+function getAnswerSummaryMessageKey(
+  userId: UserId,
+  active: NonNullable<
+    Awaited<ReturnType<QuestionnaireEngine["getActiveQuestion"]>>
+  >,
+): string {
+  return `${userId}:${active.flow.questionnaireId}:${active.question.id}`;
+}
+
+function clearAnswerSummaryMessagesForUser(
+  state: TelegramAdapterState,
+  userId: UserId,
+): void {
+  for (const key of state.answerSummaryMessageIds.keys()) {
+    if (key.startsWith(`${userId}:`)) {
+      state.answerSummaryMessageIds.delete(key);
+    }
+  }
 }
 
 async function handlePhotoMessage(
@@ -433,6 +571,76 @@ function renderResult(
   }
 
   return undefined;
+}
+
+function renderCallbackAnswerConfirmation(
+  active:
+    | Awaited<ReturnType<QuestionnaireEngine["getActiveQuestion"]>>
+    | undefined,
+  input: QuestionnaireAnswerInput,
+  result: QuestionnaireEngineResult,
+): string | undefined {
+  if (
+    active === undefined ||
+    result.status === "no_active_flow" ||
+    result.status === "rejected"
+  ) {
+    return undefined;
+  }
+
+  const question = active.question;
+
+  if (input.type === "single" && question.type === "single") {
+    return `Ваш ответ: ${findOptionLabel(question, input.optionId)}`;
+  }
+
+  if (input.type === "scale_1_10") {
+    return `Ваш ответ: ${input.value}`;
+  }
+
+  if (input.type === "multi_toggle" && question.type === "multi") {
+    const selectedOptionIds = result.flow?.multiSelections[question.id] ?? [];
+
+    return renderMultiSelectionConfirmation(question, selectedOptionIds);
+  }
+
+  if (input.type === "multi_done" && question.type === "multi") {
+    const labels = (active.flow.multiSelections[question.id] ?? []).map(
+      (optionId) => findOptionLabel(question, optionId),
+    );
+
+    if (labels.length === 0) {
+      return undefined;
+    }
+
+    return `Ваш ответ: ${labels.join(", ")}`;
+  }
+
+  return undefined;
+}
+
+function renderMultiSelectionConfirmation(
+  question: Extract<QuestionDefinition, { type: "multi" }>,
+  selectedOptionIds: readonly string[],
+): string {
+  if (selectedOptionIds.length === 0) {
+    return "Вы пока ничего не выбрали.";
+  }
+
+  const labels = selectedOptionIds.map((optionId) =>
+    findOptionLabel(question, optionId),
+  );
+
+  return `Вы выбрали: ${labels.join(", ")}`;
+}
+
+function findOptionLabel(
+  question: Extract<QuestionDefinition, { type: "multi" | "single" }>,
+  optionId: string,
+): string {
+  return (
+    question.options.find((option) => option.id === optionId)?.label ?? optionId
+  );
 }
 
 function renderQuestion(

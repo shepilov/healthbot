@@ -119,6 +119,11 @@ describe("Telegram adapter", () => {
     } satisfies Update);
 
     expect(calls.map((call) => call.method)).toContain("answerCallbackQuery");
+    expect(findMessageContaining(calls, "Ваш ответ: 7")?.payload).toMatchObject(
+      {
+        text: expect.stringContaining("Ваш ответ: 7"),
+      },
+    );
     await expect(app.eventStore.loadByUser("200")).resolves.toMatchObject([
       { type: "QuestionnaireStarted" },
       {
@@ -129,6 +134,139 @@ describe("Telegram adapter", () => {
       },
       { type: "QuestionnaireCompleted" },
     ]);
+  });
+
+  it("shows selected single-choice labels in a summary message", async () => {
+    const app = createInMemoryHealthBotApp({
+      questionnaires: [
+        {
+          id: "profile",
+          questions: [
+            {
+              id: "skin_type",
+              text: "Тип кожи",
+              type: "single",
+              options: [
+                { id: "dry", label: "Сухая" },
+                { id: "normal", label: "Нормальная" },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const bot = createHealthBot({
+      app,
+      botInfo: testBotInfo,
+      logger: pino({ enabled: false }),
+      token: "123456:test-token",
+    });
+    const calls = installTelegramApiMock(bot);
+
+    await bot.handleUpdate(messageUpdate(1, "/profile"));
+    calls.length = 0;
+    await bot.handleUpdate(callbackUpdate(2, "q:single:normal"));
+
+    expect(
+      findMessageContaining(calls, "Ваш ответ: Нормальная")?.payload,
+    ).toMatchObject({
+      text: expect.stringContaining("Ваш ответ: Нормальная"),
+    });
+  });
+
+  it("sends the next question as a new message after an inline answer", async () => {
+    const app = createInMemoryHealthBotApp({
+      questionnaires: [
+        {
+          id: "profile",
+          questions: [
+            {
+              id: "skin_type",
+              text: "Тип кожи",
+              type: "single",
+              options: [
+                { id: "dry", label: "Сухая" },
+                { id: "normal", label: "Нормальная" },
+              ],
+            },
+            {
+              id: "country",
+              text: "Страна проживания",
+              type: "text",
+            },
+          ],
+        },
+      ],
+    });
+    const bot = createHealthBot({
+      app,
+      botInfo: testBotInfo,
+      logger: pino({ enabled: false }),
+      token: "123456:test-token",
+    });
+    const calls = installTelegramApiMock(bot);
+
+    await bot.handleUpdate(messageUpdate(1, "/profile"));
+    calls.length = 0;
+    await bot.handleUpdate(callbackUpdate(2, "q:single:normal"));
+
+    expect(
+      findMessageContaining(calls, "Ваш ответ: Нормальная")?.payload,
+    ).toBeDefined();
+    expect(
+      findMessageContaining(calls, "Страна проживания")?.payload,
+    ).toBeDefined();
+    expect(findEditContaining(calls, "Страна проживания")).toBeUndefined();
+  });
+
+  it("keeps one summary message per multi-select question", async () => {
+    const app = createInMemoryHealthBotApp({
+      questionnaires: [
+        {
+          id: "profile",
+          questions: [
+            {
+              id: "main_goal",
+              text: "Что беспокоит?",
+              type: "multi",
+              options: [
+                { id: "skin", label: "Кожа" },
+                { id: "sleep", label: "Сон" },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const bot = createHealthBot({
+      app,
+      botInfo: testBotInfo,
+      logger: pino({ enabled: false }),
+      token: "123456:test-token",
+    });
+    const calls = installTelegramApiMock(bot);
+
+    await bot.handleUpdate(messageUpdate(1, "/profile"));
+    calls.length = 0;
+    await bot.handleUpdate(callbackUpdate(2, "q:multi:skin"));
+
+    expect(
+      findMessageContaining(calls, "Вы выбрали: Кожа")?.payload,
+    ).toMatchObject({
+      text: expect.stringContaining("Вы выбрали: Кожа"),
+    });
+
+    calls.length = 0;
+    await bot.handleUpdate(callbackUpdate(3, "q:multi:sleep"));
+
+    expect(
+      findEditContaining(calls, "Вы выбрали: Кожа, Сон")?.payload,
+    ).toMatchObject({
+      text: expect.stringContaining("Вы выбрали: Кожа, Сон"),
+    });
+    expect(
+      findMessageContaining(calls, "Вы выбрали: Кожа, Сон"),
+    ).toBeUndefined();
   });
 
   it("cancels an active questionnaire", async () => {
@@ -244,6 +382,50 @@ function messageUpdate(updateId: number, text: string): Update {
   } satisfies Update;
 }
 
+function callbackUpdate(updateId: number, data: string): Update {
+  return {
+    update_id: updateId,
+    callback_query: {
+      id: `callback-${updateId}`,
+      chat_instance: "chat-instance",
+      data,
+      from: { id: 200, is_bot: false, first_name: "User" },
+      message: {
+        message_id: updateId,
+        date: 1,
+        chat: { id: 100, type: "private", first_name: "User" },
+      },
+    },
+  } satisfies Update;
+}
+
 function findMethod(calls: readonly TelegramApiCall[], method: string) {
   return calls.find((call) => call.method === method);
+}
+
+function findMessageContaining(
+  calls: readonly TelegramApiCall[],
+  text: string,
+) {
+  return calls.find(
+    (call) =>
+      call.method === "sendMessage" &&
+      typeof call.payload === "object" &&
+      call.payload !== null &&
+      "text" in call.payload &&
+      typeof call.payload.text === "string" &&
+      call.payload.text.includes(text),
+  );
+}
+
+function findEditContaining(calls: readonly TelegramApiCall[], text: string) {
+  return calls.find(
+    (call) =>
+      call.method === "editMessageText" &&
+      typeof call.payload === "object" &&
+      call.payload !== null &&
+      "text" in call.payload &&
+      typeof call.payload.text === "string" &&
+      call.payload.text.includes(text),
+  );
 }
