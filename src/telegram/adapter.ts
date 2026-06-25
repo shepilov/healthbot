@@ -856,6 +856,7 @@ function getMainMenuText(): string {
     "/daily — ежедневный чек-ин",
     "/weekly — еженедельный чек-ин",
     "/monthly — ежемесячный чек-ин",
+    "/status — статус профиля и чек-инов",
     "/profile — заполнить профиль заново",
   ].join("\n");
 }

@@ -86,8 +86,13 @@ describe("Telegram adapter", () => {
 
     await bot.handleUpdate(messageUpdate(3, "/start"));
 
-    expect(findMethod(calls, "sendMessage")?.payload).toMatchObject({
+    const startMessage = findMethod(calls, "sendMessage")?.payload;
+
+    expect(startMessage).toMatchObject({
       text: expect.stringContaining("/daily"),
+    });
+    expect(startMessage).toMatchObject({
+      text: expect.stringContaining("/status"),
     });
   });
 
